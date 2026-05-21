@@ -28,3 +28,17 @@ Bundle these files/directories for transfer:
 ```
 
 No internet image pulls are required after import.
+
+## Backup and restore
+
+Create full backup (database + storage volume):
+
+```bash
+./scripts/backup.sh
+```
+
+Restore from a backup directory (destructive):
+
+```bash
+./scripts/restore.sh backups/space-backup-YYYYMMDD-HHMMSS --force
+```

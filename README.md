@@ -86,3 +86,5 @@ See:
 - This phase initializes production-minded structure and core modules.
 - Dashboard includes Uppy Tus-based resumable upload panel.
 - Office/media preview workers and additional advanced admin settings remain next.
+- `backup.sh` now creates a full backup directory containing PostgreSQL dump plus storage volume archive.
+- `restore.sh <backup_dir> --force` restores both DB and storage data.
