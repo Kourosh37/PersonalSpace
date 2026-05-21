@@ -152,10 +152,11 @@ func (h Handler) adminGetUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type adminPatchUserRequest struct {
-	Username     *string `json:"username"`
-	Role         *string `json:"role"`
-	IsActive     *bool   `json:"isActive"`
-	StorageQuota *int64  `json:"storageQuotaBytes"`
+	Username          *string `json:"username"`
+	Role              *string `json:"role"`
+	IsActive          *bool   `json:"isActive"`
+	StorageQuota      *int64  `json:"storageQuotaBytes"`
+	ClearStorageQuota *bool   `json:"clearStorageQuota"`
 }
 
 func (h Handler) adminPatchUser(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +218,9 @@ func (h Handler) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		quota = req.StorageQuota
+	}
+	if req.ClearStorageQuota != nil && *req.ClearStorageQuota {
+		quota = nil
 	}
 
 	_, err = h.DB.Exec(r.Context(), `

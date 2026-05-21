@@ -25,6 +25,7 @@
 - HttpOnly cookie sessions.
 - Admin role checks on `/api/admin/*`.
 - HTTP security headers (`HSTS`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`, `COOP`).
+- CSRF protection on mutating `/api/*` requests via Origin/Referer validation.
 - Audit log entries for login and setting updates.
 
 ## Implemented settings

@@ -27,6 +27,7 @@ This phase also includes an initial working file workflow:
 - Auth password change endpoint (`POST /api/auth/change-password`)
 - Redis-backed request rate limiting for login and public share access
 - Security headers middleware (`HSTS` behind HTTPS, `X-Frame-Options`, `nosniff`, `Permissions-Policy`)
+- CSRF protection for state-changing API requests using Origin/Referer validation
 - Background maintenance loop for expired sessions and expired upload cleanup
 
 ## Quick start

@@ -35,6 +35,8 @@ func (h Handler) Router() http.Handler {
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
+	csrfMW := middleware.NewCSRFMiddleware(h.Cfg.CSRFDisabled, h.Cfg.SessionCookieName, h.Cfg.PublicBaseURL, h.Cfg.AllowedOrigins)
+	r.Use(csrfMW.Handler)
 
 	authMW := middleware.AuthMiddleware{DB: h.DB, SessionCookieName: h.Cfg.SessionCookieName}
 

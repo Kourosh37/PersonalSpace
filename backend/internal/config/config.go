@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"strconv"
 	"time"
 )
@@ -19,6 +20,8 @@ type Config struct {
 	StorageRoot       string
 	LoginRatePerMin   int
 	ShareRatePerMin   int
+	CSRFDisabled      bool
+	AllowedOrigins    []string
 }
 
 func Load() (Config, error) {
@@ -30,6 +33,10 @@ func Load() (Config, error) {
 	secureCookie, err := getenvBool("BACKEND_SESSION_SECURE", false)
 	if err != nil {
 		return Config{}, fmt.Errorf("parse BACKEND_SESSION_SECURE: %w", err)
+	}
+	csrfDisabled, err := getenvBool("BACKEND_CSRF_DISABLED", false)
+	if err != nil {
+		return Config{}, fmt.Errorf("parse BACKEND_CSRF_DISABLED: %w", err)
 	}
 
 	cfg := Config{
@@ -44,6 +51,8 @@ func Load() (Config, error) {
 		StorageRoot:       getenv("BACKEND_STORAGE_ROOT", "/data/storage"),
 		LoginRatePerMin:   getenvIntMust("SECURITY_LOGIN_RATE_LIMIT_PER_MINUTE", 15),
 		ShareRatePerMin:   getenvIntMust("SECURITY_SHARE_PASSWORD_RATE_LIMIT_PER_MINUTE", 20),
+		CSRFDisabled:      csrfDisabled,
+		AllowedOrigins:    parseCSV(getenv("BACKEND_ALLOWED_ORIGINS", "")),
 	}
 
 	if cfg.DBDSN == "" {
@@ -51,6 +60,22 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		result = append(result, item)
+	}
+	return result
 }
 
 func getenvIntMust(key string, fallback int) int {
