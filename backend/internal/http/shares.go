@@ -262,6 +262,10 @@ func (h Handler) publicShareInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) publicSharePasswordCheck(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "share_password_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
 	password := strings.TrimSpace(r.URL.Query().Get("password"))
 	if password == "" {
 		var req struct {
@@ -282,6 +286,10 @@ func (h Handler) publicSharePasswordCheck(w http.ResponseWriter, r *http.Request
 }
 
 func (h Handler) publicShareItems(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
 	password := getPublicSharePassword(r)
 	share, err := h.resolvePublicShare(r, password, true)
 	if err != nil {
@@ -378,6 +386,10 @@ func (h Handler) publicShareFilePreview(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, inline bool) {
+	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
 	password := getPublicSharePassword(r)
 	share, err := h.resolvePublicShare(r, password, true)
 	if err != nil {
@@ -475,6 +487,10 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 }
 
 func (h Handler) publicShareFolderZip(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
 	password := getPublicSharePassword(r)
 	share, err := h.resolvePublicShare(r, password, true)
 	if err != nil {

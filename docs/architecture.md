@@ -43,6 +43,8 @@
   plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
   plus user management (`/api/admin/users*`)
 - Auth: own password change endpoint (`POST /api/auth/change-password`)
+- Security: Redis-backed rate limiting for login and public share access
+- Maintenance: periodic cleanup of expired sessions and expired upload sessions
 
 ## Next phases
 

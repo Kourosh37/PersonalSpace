@@ -12,6 +12,8 @@ import (
 	"space/backend/internal/config"
 	"space/backend/internal/db"
 	httpapi "space/backend/internal/http"
+	"space/backend/internal/maintenance"
+	"space/backend/internal/security"
 	"space/backend/internal/storage"
 )
 
@@ -22,7 +24,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	appCtx, cancelApp := context.WithCancel(context.Background())
+	defer cancelApp()
+
+	ctx := appCtx
 	pool, err := db.Connect(ctx, cfg.DBDSN)
 	if err != nil {
 		slog.Error("connect db", "error", err)
@@ -36,7 +41,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	handler := httpapi.Handler{DB: pool, Cfg: cfg, Storage: localStorage}
+	var rateLimiter security.RateLimiter
+	redisLimiter := security.NewRedisRateLimiter(cfg.RedisAddr)
+	if err := redisLimiter.Ping(ctx); err != nil {
+		slog.Warn("redis rate limiter ping failed, continuing without strict limiter", "error", err)
+	} else {
+		rateLimiter = redisLimiter
+	}
+
+	handler := httpapi.Handler{DB: pool, Cfg: cfg, Storage: localStorage, RateLimiter: rateLimiter}
+
+	maintenanceRunner := maintenance.Runner{
+		DB:      pool,
+		Storage: localStorage,
+		Every:   30 * time.Minute,
+	}
+	go maintenanceRunner.Start(appCtx)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler.Router(),
@@ -54,6 +74,7 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
+	cancelApp()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

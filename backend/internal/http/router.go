@@ -12,6 +12,7 @@ import (
 	"space/backend/internal/auth"
 	"space/backend/internal/config"
 	"space/backend/internal/middleware"
+	"space/backend/internal/security"
 	"space/backend/internal/settings"
 	"space/backend/internal/storage"
 
@@ -21,9 +22,10 @@ import (
 )
 
 type Handler struct {
-	DB      *pgxpool.Pool
-	Cfg     config.Config
-	Storage storage.Interface
+	DB          *pgxpool.Pool
+	Cfg         config.Config
+	Storage     storage.Interface
+	RateLimiter security.RateLimiter
 }
 
 func (h Handler) Router() http.Handler {
@@ -64,6 +66,10 @@ type loginRequest struct {
 }
 
 func (h Handler) login(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "auth_login", h.Cfg.LoginRatePerMin) {
+		return
+	}
+
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})

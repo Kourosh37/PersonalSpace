@@ -24,6 +24,8 @@ This phase also includes an initial working file workflow:
 - Admin APIs/pages for settings, storage summary, expired upload cleanup, and audit logs
 - Admin user management APIs/pages (list/create/update/deactivate/change-password)
 - Auth password change endpoint (`POST /api/auth/change-password`)
+- Redis-backed request rate limiting for login and public share access
+- Background maintenance loop for expired sessions and expired upload cleanup
 
 ## Quick start
 
