@@ -68,6 +68,36 @@ func (s *LocalStorage) PutStream(ctx context.Context, key string, reader io.Read
 	return nil
 }
 
+func (s *LocalStorage) AppendAt(ctx context.Context, key string, offset int64, reader io.Reader) (int64, error) {
+	path, err := s.resolve(key)
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return 0, fmt.Errorf("create parent directory: %w", err)
+	}
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("open append file: %w", err)
+	}
+	defer file.Close()
+
+	current, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, fmt.Errorf("seek end: %w", err)
+	}
+	if current != offset {
+		return 0, fmt.Errorf("offset mismatch")
+	}
+
+	n, err := io.Copy(file, &contextReader{ctx: ctx, reader: reader})
+	if err != nil {
+		return n, fmt.Errorf("append stream: %w", err)
+	}
+	return n, nil
+}
+
 func (s *LocalStorage) GetStream(ctx context.Context, key string) (io.ReadCloser, error) {
 	path, err := s.resolve(key)
 	if err != nil {

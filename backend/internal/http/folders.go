@@ -45,6 +45,7 @@ func (h Handler) registerFolderRoutes(api chi.Router, authMW middleware.AuthMidd
 	api.With(authMW.RequireAuth).Patch("/folders/{id}", h.renameFolder)
 	api.With(authMW.RequireAuth).Delete("/folders/{id}", h.deleteFolder)
 	api.With(authMW.RequireAuth).Post("/folders/{id}/move", h.moveFolder)
+	api.With(authMW.RequireAuth).Get("/folders/{id}/download-zip", h.downloadFolderZip)
 }
 
 func (h Handler) listFolderItems(w http.ResponseWriter, r *http.Request) {

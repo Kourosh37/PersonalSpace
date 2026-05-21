@@ -44,6 +44,7 @@ func (h Handler) registerShareRoutes(api chi.Router, authMW middleware.AuthMiddl
 	api.Get("/public/shares/{token}/items", h.publicShareItems)
 	api.Get("/public/shares/{token}/files/{fileId}/download", h.publicShareFileDownload)
 	api.Get("/public/shares/{token}/files/{fileId}/preview", h.publicShareFilePreview)
+	api.Get("/public/shares/{token}/folders/{folderId}/download-zip", h.publicShareFolderZip)
 }
 
 type createShareRequest struct {
@@ -445,7 +446,9 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		defer stream.Close()
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, stream)
-		h.bumpShareDownloadCount(r, share)
+		if !inline {
+			h.bumpShareDownloadCount(r, share)
+		}
 		return
 	}
 
@@ -466,6 +469,54 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = io.Copy(w, stream)
+	if !inline {
+		h.bumpShareDownloadCount(r, share)
+	}
+}
+
+func (h Handler) publicShareFolderZip(w http.ResponseWriter, r *http.Request) {
+	password := getPublicSharePassword(r)
+	share, err := h.resolvePublicShare(r, password, true)
+	if err != nil {
+		h.publicShareErr(w, err)
+		return
+	}
+	if share.TargetType != "folder" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "share target is not a folder"})
+		return
+	}
+	if !share.AllowDownload {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "download is disabled for this share"})
+		return
+	}
+
+	folderID := chi.URLParam(r, "folderId")
+	if _, err := uuid.Parse(folderID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder id"})
+		return
+	}
+
+	var inTree bool
+	err = h.DB.QueryRow(r.Context(), `
+		WITH RECURSIVE tree AS (
+			SELECT id FROM folders WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL
+			UNION ALL
+			SELECT f.id FROM folders f JOIN tree t ON f.parent_id=t.id WHERE f.owner_id=$2 AND f.deleted_at IS NULL
+		)
+		SELECT EXISTS(SELECT 1 FROM tree WHERE id=$3)
+	`, share.TargetID, share.OwnerID, folderID).Scan(&inTree)
+	if err != nil || !inTree {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "folder is outside the shared folder boundary"})
+		return
+	}
+
+	var folderName string
+	if err := h.DB.QueryRow(r.Context(), `SELECT name FROM folders WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL`, folderID, share.OwnerID).Scan(&folderName); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
+		return
+	}
+
+	h.streamFolderZip(w, r, folderID, share.OwnerID, normalizeNodeName(folderName)+".zip")
 	h.bumpShareDownloadCount(r, share)
 }
 

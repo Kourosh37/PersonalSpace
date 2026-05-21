@@ -47,6 +47,7 @@ export default function PublicSharePage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [parentId, setParentId] = useState<string | null>(null);
+  const currentFolderId = parentId ?? share?.targetId ?? null;
 
   const baseQuery = useMemo(() => {
     const q = new URLSearchParams();
@@ -159,6 +160,14 @@ export default function PublicSharePage() {
             <button className="btn-ghost" type="button" onClick={() => setParentId(null)}>
               Root
             </button>
+            {share.allowDownload && currentFolderId ? (
+              <a
+                className="btn-primary"
+                href={`/api/public/shares/${token}/folders/${currentFolderId}/download-zip${authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : ""}`}
+              >
+                Download ZIP
+              </a>
+            ) : null}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">

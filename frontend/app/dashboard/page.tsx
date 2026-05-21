@@ -405,9 +405,14 @@ export default function DashboardPage() {
                             </button>
                           </>
                         ) : (
-                          <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFolder(item)} type="button">
-                            Delete
-                          </button>
+                          <>
+                            <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/folders/${item.id}/download-zip`}>
+                              ZIP
+                            </a>
+                            <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFolder(item)} type="button">
+                              Delete
+                            </button>
+                          </>
                         )}
                         <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => createShare(item)} type="button">
                           Share

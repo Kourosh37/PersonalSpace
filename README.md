@@ -15,10 +15,13 @@ This is phase 1 implementation (foundation):
 This phase also includes an initial working file workflow:
 - Folder CRUD + move
 - File upload (streaming multipart) with server-side max size enforcement
+- Custom resumable upload sessions (`/api/uploads/init|chunk|status|complete|cancel`)
 - File metadata/read/rename/move/delete
 - File download + preview with HTTP Range support
+- Folder ZIP download (private + public share)
 - Share link creation/revoke/list
 - Public share pages (`/s/{token}`) with optional password checks
+- Admin APIs/pages for settings, storage summary, expired upload cleanup, and audit logs
 
 ## Quick start
 

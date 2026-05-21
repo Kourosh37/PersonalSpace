@@ -14,6 +14,7 @@ type ObjectInfo struct {
 
 type Interface interface {
 	PutStream(ctx context.Context, key string, reader io.Reader) error
+	AppendAt(ctx context.Context, key string, offset int64, reader io.Reader) (int64, error)
 	GetStream(ctx context.Context, key string) (io.ReadCloser, error)
 	GetRangeStream(ctx context.Context, key string, start int64, end int64) (io.ReadCloser, error)
 	Delete(ctx context.Context, key string) error

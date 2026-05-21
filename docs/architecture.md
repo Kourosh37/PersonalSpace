@@ -36,8 +36,11 @@
 - Auth: `login`, `logout`, `me`
 - Folders: list items, create, rename, delete, move
 - Files: upload, metadata, rename, delete, move, download, preview (Range)
+- Upload sessions: init, chunk append, status, complete, cancel (custom resumable flow)
 - Shares: create/list/revoke + public share info/items/file download/file preview
+- ZIP: private folder ZIP + public shared folder ZIP
 - Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
+  plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
 
 ## Next phases
 
