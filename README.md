@@ -22,6 +22,8 @@ This phase also includes an initial working file workflow:
 - Share link creation/revoke/list
 - Public share pages (`/s/{token}`) with optional password checks
 - Admin APIs/pages for settings, storage summary, expired upload cleanup, and audit logs
+- Admin user management APIs/pages (list/create/update/deactivate/change-password)
+- Auth password change endpoint (`POST /api/auth/change-password`)
 
 ## Quick start
 

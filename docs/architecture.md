@@ -41,6 +41,8 @@
 - ZIP: private folder ZIP + public shared folder ZIP
 - Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
   plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
+  plus user management (`/api/admin/users*`)
+- Auth: own password change endpoint (`POST /api/auth/change-password`)
 
 ## Next phases
 

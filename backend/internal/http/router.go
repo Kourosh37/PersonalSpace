@@ -39,6 +39,7 @@ func (h Handler) Router() http.Handler {
 			ar.Post("/login", h.login)
 			ar.Post("/logout", h.logout)
 			ar.With(authMW.RequireAuth).Get("/me", h.me)
+			ar.With(authMW.RequireAuth).Post("/change-password", h.changeOwnPassword)
 		})
 
 		h.registerFolderRoutes(api, authMW)

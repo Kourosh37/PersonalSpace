@@ -70,6 +70,21 @@ export default function AdminStoragePage() {
     }
   }
 
+  async function cleanupPreviewCache() {
+    setError(null);
+    try {
+      const response = await fetch("/api/admin/storage/cleanup-preview-cache", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error ?? "Failed to cleanup preview cache");
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to cleanup preview cache");
+    }
+  }
+
   return (
     <div className="space-y-5">
       <h1 className="text-2xl font-semibold">Storage</h1>
@@ -95,6 +110,9 @@ export default function AdminStoragePage() {
         </button>
         <button className="btn-ghost" type="button" onClick={cleanupExpired}>
           Cleanup Expired Uploads
+        </button>
+        <button className="btn-ghost" type="button" onClick={cleanupPreviewCache}>
+          Cleanup Preview Cache
         </button>
       </div>
     </div>

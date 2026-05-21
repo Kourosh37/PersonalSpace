@@ -17,6 +17,10 @@ export default function AdminHomePage() {
           <h2 className="text-lg font-semibold">Audit Logs</h2>
           <p className="mt-1 text-slate-600">Security and operational event history.</p>
         </Link>
+        <Link className="panel p-5 hover:border-pine" href="/admin/users">
+          <h2 className="text-lg font-semibold">Users</h2>
+          <p className="mt-1 text-slate-600">Create users, update roles, disable accounts, reset passwords.</p>
+        </Link>
       </div>
     </div>
   );

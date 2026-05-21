@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -47,8 +49,10 @@ func (h Handler) registerAdminRoutes(admin chi.Router) {
 	admin.Get("/storage/summary", h.adminStorageSummary)
 	admin.Post("/storage/recalculate", h.adminStorageRecalculate)
 	admin.Post("/storage/cleanup-expired-uploads", h.adminCleanupExpiredUploads)
+	admin.Post("/storage/cleanup-preview-cache", h.adminCleanupPreviewCache)
 	admin.Get("/audit-logs", h.adminAuditLogs)
 	admin.Get("/system/info", h.adminSystemInfo)
+	h.registerAdminUserRoutes(admin)
 }
 
 func (h Handler) adminGetSettings(w http.ResponseWriter, r *http.Request) {
@@ -270,6 +274,19 @@ func (h Handler) adminCleanupExpiredUploads(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"cleaned": cleaned})
+}
+
+func (h Handler) adminCleanupPreviewCache(w http.ResponseWriter, r *http.Request) {
+	previewsPath := filepath.Join(h.Cfg.StorageRoot, "previews")
+	if err := os.RemoveAll(previewsPath); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not remove preview cache"})
+		return
+	}
+	if err := os.MkdirAll(previewsPath, 0o755); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not recreate preview cache directory"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h Handler) adminAuditLogs(w http.ResponseWriter, r *http.Request) {
