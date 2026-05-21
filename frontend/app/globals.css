@@ -1,0 +1,31 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-mist text-ink min-h-screen;
+}
+
+.panel {
+  @apply bg-white border border-slate-200 rounded-2xl shadow-sm;
+}
+
+.input {
+  @apply w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-pine;
+}
+
+.btn {
+  @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition;
+}
+
+.btn-primary {
+  @apply btn bg-pine text-white hover:bg-teal-700;
+}
+
+.btn-ghost {
+  @apply btn border border-slate-300 bg-white hover:bg-slate-50;
+}

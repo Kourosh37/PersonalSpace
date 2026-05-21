@@ -1,0 +1,24 @@
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+
+# Node
+frontend/node_modules
+frontend/.next
+frontend/.turbo
+
+# Go
+backend/bin
+
+# Docker export
+artifacts/
+images/
+
+# Backups
+backups/

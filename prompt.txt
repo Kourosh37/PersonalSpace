@@ -1,0 +1,1529 @@
+You are a senior full-stack engineer, backend engineer, frontend engineer, storage engineer, DevOps engineer, and product-minded software architect.
+
+Build a complete production-ready self-hosted private file manager and file sharing web application.
+
+Project name:
+Space
+
+Main deployment domain example:
+https://space.example.com
+
+Main goal:
+Build a beautiful, minimal, stable, optimized, secure, fully Dockerized private cloud drive/file manager that can be deployed on a server under a subdomain like:
+
+https://space.example.com
+
+The application must allow authenticated users/admins to:
+- log in securely
+- create folders
+- upload any file type
+- upload very large files reliably
+- resume interrupted uploads
+- download files reliably
+- resume interrupted downloads where possible
+- preview supported file formats
+- stream large media files
+- share files/folders with public links
+- allow public link users to browse shared folders
+- allow public link users to preview supported files if permitted
+- allow public link users to download files/folders if permitted
+- manage system settings from an admin panel
+
+The application must be production-minded, stable, secure, clean, well-documented, maintainable, and extensible.
+
+================================================================================
+ABSOLUTE DEPLOYMENT REQUIREMENTS
+================================================================================
+
+The project must be fully Dockerized.
+
+The host server must NOT require installing any application dependency manually except:
+- Docker
+- Docker Compose plugin or docker compose support
+
+Do not require host installation of:
+- Node.js
+- Go
+- PostgreSQL
+- Redis
+- MinIO
+- ffmpeg
+- LibreOffice
+- ImageMagick
+- libvips
+- Python
+- any runtime dependency
+
+Everything must run inside Docker containers.
+
+The project must support offline deployment.
+
+Offline deployment flow:
+
+On an online/build machine:
+- Build all Docker images
+- Export all required images to tar archives
+- Create a complete deployment bundle
+
+Transfer deployment bundle to offline server.
+
+On offline server:
+- Import Docker images
+- Start the application with Docker Compose
+- No internet access should be required after importing images
+
+Required scripts:
+- scripts/build-images.sh
+- scripts/export-images.sh
+- scripts/import-images.sh
+- scripts/start.sh
+- scripts/stop.sh
+- scripts/restart.sh
+- scripts/logs.sh
+- scripts/backup.sh
+- scripts/restore.sh
+- scripts/create-admin.sh
+- scripts/migrate.sh
+
+The offline bundle should include:
+- docker-compose.yml
+- docker-compose.prod.yml if needed
+- Caddyfile
+- .env.example
+- README.md
+- docs
+- scripts
+- database migrations
+- image tar files
+- backup/restore instructions
+- offline deployment instructions
+
+No container should require pulling images from the internet on the offline server after import.
+
+================================================================================
+IMPORTANT PRODUCT REQUIREMENTS
+================================================================================
+
+This is a self-hosted private file manager similar to a personal cloud drive.
+
+The user wants:
+- A very beautiful and minimal UI
+- Stable upload and download
+- Accurate and attractive upload/download progress
+- Support for huge files
+- No artificial file size limit by default
+- Admin-configurable maximum file size
+- Any file type should be accepted by default
+- Supported files should be previewable
+- Unsupported files should show metadata and download option
+- Shared public links should also support preview
+- Folders should be shareable and browsable publicly
+- File/folder download from public links should respect permissions
+- Full admin panel to configure application behavior
+
+Important:
+"Unlimited file size" means the app should not impose a software-level artificial limit by default.
+Real limits still depend on:
+- disk space
+- filesystem
+- browser
+- network
+- reverse proxy
+- server configuration
+- container volume configuration
+
+Do not reject files based on extension by default.
+
+Store files as binary data.
+
+Preview supported types safely.
+
+Never expose real filesystem paths.
+
+================================================================================
+PREFERRED TECH STACK
+================================================================================
+
+Frontend:
+- Next.js latest stable version
+- App Router
+- TypeScript
+- Tailwind CSS
+- shadcn/ui
+- Lucide icons
+- TanStack Query
+- Zustand if needed
+- Uppy for uploads, preferably with tus resumable uploads
+- tus-js-client if implementing tus
+- Monaco Editor or lightweight code viewer for code/text previews if appropriate
+- PDF preview using browser native viewer or pdf.js
+- HTML5 audio/video players
+- React Hook Form
+- Zod for frontend validation
+
+Backend:
+- Go latest stable version
+- Chi router preferred
+- PostgreSQL
+- pgx
+- sqlc recommended
+- Goose or golang-migrate for database migrations
+- Redis recommended for:
+  - rate limiting
+  - upload/session state if needed
+  - background preview jobs
+  - distributed locks if needed
+- Local filesystem storage by default
+- Storage must be abstracted behind an interface for future MinIO/S3 support
+- Secure cookie-based sessions
+- Argon2id preferred for password hashing
+- Structured logging with slog or zerolog
+- Database migrations
+- Graceful shutdown
+- Streaming upload/download
+- HTTP Range request support
+- tus protocol support preferred for resumable uploads
+
+Infrastructure:
+- Docker
+- Docker Compose
+- Caddy as reverse proxy
+- PostgreSQL container
+- Redis container if used
+- Backend container
+- Frontend container
+- Preview worker container if used
+- Optional MinIO container only if specifically chosen, but local filesystem must be default
+- Persistent volumes
+- Health checks
+
+Preview/conversion tools:
+If needed, run these only inside Docker containers:
+- ffmpeg for video/audio thumbnails/metadata
+- LibreOffice headless for Office-to-PDF conversion
+- libvips/ImageMagick for image thumbnails
+- Optional worker service for preview jobs
+
+Recommended final stack:
+- Backend: Go + Chi + pgx + sqlc + PostgreSQL + Redis + Argon2id + tus support
+- Frontend: Next.js + TypeScript + Tailwind CSS + shadcn/ui + TanStack Query + Uppy
+- Storage: Local filesystem by default through Storage interface
+- Reverse Proxy: Caddy
+- Deployment: Docker Compose
+- Preview Worker: Go worker or separate worker container with LibreOffice/ffmpeg/tools
+
+================================================================================
+CORE FEATURES
+================================================================================
+
+Private dashboard features:
+- Login
+- Logout
+- Session persistence
+- File/folder browser
+- Create folder
+- Rename folder
+- Delete folder
+- Move folder
+- Rename file
+- Delete file
+- Move file
+- Upload files
+- Upload multiple files
+- Upload folder if browser supports directory upload
+- Drag and drop upload
+- Breadcrumb navigation
+- Search
+- Sorting by:
+  - name
+  - size
+  - type
+  - modified date
+- Grid view
+- List view
+- File/folder details panel
+- Preview modal/page
+- Download file
+- Download folder as ZIP
+- Generate share link for file
+- Generate share link for folder
+- Revoke share link
+- Copy share link
+- Admin panel access for admin users
+
+Public share features:
+- Public share page by secure token
+- Optional password-protected share links
+- Share expiration
+- Download limit if implemented
+- Browse folder contents for shared folders
+- Preview files if public preview is enabled
+- Download files if public download is enabled
+- Download shared folder as ZIP if allowed
+- Show clean public UI without exposing private data
+- Respect all admin settings
+
+Admin features:
+- Admin-only panel
+- Configure maximum upload file size
+- Configure sharing settings
+- Configure preview settings
+- Configure user settings
+- Configure security settings
+- View storage summary
+- View audit logs
+- Cleanup expired uploads
+- Cleanup preview cache
+- Change admin password
+- Manage users if multi-user support is implemented
+
+================================================================================
+UPLOAD REQUIREMENTS - VERY IMPORTANT
+================================================================================
+
+Uploading must be extremely stable and user-friendly.
+
+Required upload capabilities:
+- Upload any file type by default
+- Upload multiple files
+- Drag and drop upload
+- Upload folders if browser supports directory upload
+- Very accurate upload progress per file
+- Overall upload progress
+- Upload speed display
+- ETA display
+- Uploaded bytes / total bytes display
+- Beautiful upload queue UI
+- Clear status states:
+  - queued
+  - preparing
+  - uploading
+  - paused
+  - retrying
+  - completed
+  - failed
+  - canceled
+- Ability to pause/resume uploads if supported
+- Ability to cancel upload
+- Retry failed chunks automatically
+- Retry with exponential backoff
+- Detect network interruption
+- Resume upload after network is restored
+- Resume upload after page refresh
+- Resume upload when user returns to the app
+- Persist upload session metadata client-side in IndexedDB/localStorage as needed
+- Persist upload session metadata server-side in PostgreSQL/Redis as needed
+
+Resumable upload:
+Implement robust resumable uploads.
+
+Preferred implementation:
+- tus protocol
+- Backend supports tus-compatible endpoints
+- Frontend uses Uppy + tus-js-client
+- Store upload progress on server
+- Support HEAD requests to query upload offset
+- Support PATCH requests to append chunks
+- Support upload completion hooks
+- After upload completion, create file metadata in database
+
+Alternative if tus is not used:
+Implement custom chunked upload:
+- POST /api/uploads/init
+- PATCH /api/uploads/:id/chunk
+- GET /api/uploads/:id/status
+- POST /api/uploads/:id/complete
+- POST /api/uploads/:id/pause optional
+- DELETE /api/uploads/:id/cancel
+- Use chunk indexes or byte ranges
+- Validate uploaded offsets
+- Store uploaded size
+- Support resume
+- Merge chunks safely or write to one temporary file with verified offsets
+- Use locks to prevent corruption
+
+Large upload rules:
+- Never read entire uploaded file into memory
+- Stream chunks/body to disk/storage
+- Use io.Copy/io.CopyBuffer
+- Use temporary/incomplete storage keys until complete
+- On completion, atomically mark file as ready
+- Clean up abandoned incomplete uploads using a background cleanup job
+- Keep upload state in database
+- Validate ownership and folder permissions
+- Validate configured maximum file size
+- Validate configured user quota if enabled
+
+Browser/background behavior:
+Implement the best possible behavior for browsers:
+- If the user navigates inside the app or refreshes, upload should resume after the app reloads.
+- If network drops and comes back, upload should resume.
+- If the browser tab remains open but the user switches apps/tabs, upload should continue as much as browsers allow.
+- If the browser suspends background JavaScript, the app must recover and resume when active again.
+- If the tab/browser is fully closed, JavaScript upload cannot continue in normal browsers, but the upload session must remain resumable when the user opens the app again.
+- Document browser limitations clearly in README.
+
+Upload UX:
+- Show a polished upload panel, preferably bottom-right.
+- Show progress bars with smooth animation.
+- Show exact percentage.
+- Show speed and ETA.
+- Show "Paused", "Waiting for network", "Retrying in X seconds", "Resumable" states.
+- Show "Resume all", "Pause all", "Cancel all" actions if supported.
+- Show completed uploads with success state.
+- Show failed uploads with retry button.
+- Avoid losing upload UI state on route changes.
+- Show configured maximum file size.
+- If admin has configured a max file size, warn before upload if selected file exceeds it.
+- Still rely on backend enforcement as source of truth.
+
+================================================================================
+MAX FILE SIZE ENFORCEMENT
+================================================================================
+
+Maximum upload file size must be configurable from the Admin Panel.
+
+Default:
+- Unlimited
+
+Database settings:
+- upload.max_file_size_mode = "unlimited"
+- upload.max_file_size_bytes = null
+
+If admin sets 10GB:
+- upload.max_file_size_mode = "custom"
+- upload.max_file_size_bytes = 10737418240
+
+Rules:
+- If upload.max_file_size_mode is "unlimited", do not enforce an app-level max file size.
+- If upload.max_file_size_mode is "custom", enforce upload.max_file_size_bytes.
+
+For normal streaming upload:
+- If Content-Length is present and exceeds max, reject before reading body.
+- If Content-Length is missing, count bytes while streaming and stop/reject when limit is exceeded.
+- Return HTTP 413 Payload Too Large.
+
+For tus/resumable uploads:
+- Check Upload-Length at upload creation.
+- If Upload-Length exceeds max, reject with 413.
+- If Upload-Length is deferred/unknown, track received bytes and reject if it exceeds max.
+- Prevent finalization of uploads larger than allowed size.
+- Store rejected/failed state in upload_sessions.
+
+Frontend:
+- Fetch upload settings before upload.
+- Show max file size in upload dialog.
+- If a selected file exceeds max size, show a clear error before upload.
+- Still rely on backend as the source of truth.
+- If backend rejects due to size, show a polished error message:
+  "This file exceeds the maximum allowed upload size."
+
+Admin UI for max file size:
+- Toggle/select:
+  - Unlimited
+  - Custom
+- If custom:
+  - numeric input
+  - unit selector:
+    - KB
+    - MB
+    - GB
+    - TB
+- Show computed bytes value
+- Save button
+- Reset to default button
+- Show validation errors
+- Show success toast after saving
+
+================================================================================
+DOWNLOAD REQUIREMENTS - VERY IMPORTANT
+================================================================================
+
+Downloading must be stable, streaming-based, and support resume.
+
+Required download capabilities:
+- Download any file type
+- Download very large files
+- Stream downloads
+- Support HTTP Range requests
+- Support browser resume capability
+- Correct headers:
+  - Content-Type
+  - Content-Length
+  - Content-Disposition
+  - Accept-Ranges
+  - ETag if possible
+  - Last-Modified if possible
+  - Cache-Control where appropriate
+
+Private download endpoints must validate authentication.
+
+Public shared download endpoints must validate share link permissions.
+
+Range request behavior:
+- Support Range: bytes=start-end
+- Return 206 Partial Content when valid range is requested
+- Return Content-Range
+- Return Accept-Ranges: bytes
+- Return 416 for invalid ranges
+- This is required for:
+  - large downloads
+  - video streaming
+  - audio streaming
+  - PDF preview
+  - browser download resume
+
+Download progress:
+Browser-native downloads do not always allow custom progress UI after handing off to the browser download manager.
+
+Implement two download modes:
+
+1. Browser native download:
+- Use normal link/download endpoint
+- Supports browser-managed resume if browser/server supports Range
+- Best for huge files
+
+2. In-app download progress where feasible:
+- Use fetch/streams for files where browser allows it
+- Show progress, speed, ETA
+- Save using Blob/File System Access API where possible
+- For very large files, prefer native browser download and explain limitations
+- If using File System Access API, feature-detect and gracefully fallback
+
+Important browser limitation:
+If a native browser download starts and the user leaves the web page but browser remains open, the browser download manager may continue it.
+If using in-app JavaScript fetch download, it may stop if tab is closed/suspended.
+Document this clearly.
+
+Folder download:
+- Download folders as ZIP
+- Stream ZIP response
+- Do not load entire ZIP into RAM
+- Preserve folder structure
+- Support public shared folder ZIP download if allowed
+- For ZIP streaming, Content-Length may not be known; that's acceptable
+- Show UI state accordingly
+
+Download UX:
+- Show download button
+- For files with known size, show size
+- For in-app downloads, show:
+  - percentage
+  - speed
+  - ETA
+  - downloaded bytes / total bytes
+  - pause/resume if technically supported
+- For native downloads, show "Download started in browser"
+- For failed downloads, show retry help
+
+================================================================================
+PREVIEW REQUIREMENTS - VERY IMPORTANT
+================================================================================
+
+The app must support previewing many common file formats in both:
+- authenticated private dashboard
+- public share links
+
+Preview should be safe, streaming-friendly, and stable.
+
+General preview behavior:
+- Clicking a file opens a preview modal/page.
+- Preview modal/page shows:
+  - file name
+  - size
+  - type
+  - modified date
+  - preview content if supported
+  - download button if allowed
+  - share button in private dashboard
+- If unsupported:
+  - show generic icon
+  - show "Preview not available"
+  - show metadata
+  - show download button if allowed
+- Public share links should have the same preview capability respecting permissions.
+- Do not load huge files entirely in frontend or backend.
+
+Preview categories:
+
+A) Images
+
+Support:
+- jpg/jpeg
+- png
+- gif
+- webp
+- avif if browser supports
+- bmp if browser supports or converted
+- ico if possible
+- svg with safety precautions
+
+Requirements:
+- Show image preview
+- For large images, browser loads via authorized preview endpoint
+- Optional thumbnail generation
+- SVG must not be inlined unsafely
+- Use safe headers
+- If SVG is treated as unsafe, show as text or serve safely as image with nosniff/CSP decisions
+
+B) Video
+
+Support browser-playable formats:
+- mp4
+- webm
+- ogv
+- mov if codec/browser supports
+- mkv fallback if not browser-playable
+
+Requirements:
+- Use HTML5 video player
+- Backend must support Range requests
+- Stream video
+- Never load entire video into memory
+- Show fallback if codec/container unsupported
+- Optional ffmpeg-generated thumbnail
+- Optional metadata extraction
+
+C) Audio
+
+Support:
+- mp3
+- wav
+- ogg
+- m4a if browser supports
+- flac if browser supports
+
+Requirements:
+- Use HTML5 audio player
+- Support Range requests
+- Stream audio
+- Fallback if unsupported
+
+D) PDF
+
+Support:
+- PDF preview in dashboard
+- PDF preview in public share
+
+Implementation:
+- Use browser native PDF viewer or pdf.js
+- Must stream/range where possible
+- Backend must not read entire PDF into memory
+
+E) Text files
+
+Support:
+- txt
+- md
+- markdown
+- json
+- xml
+- yaml/yml
+- csv
+- log
+- ini
+- env
+- conf
+- toml
+- sql
+- dockerfile
+- gitignore
+- common plaintext formats
+
+Requirements:
+- Use safe text/code viewer
+- For large files, do partial preview only
+- Load first N bytes/lines
+- Provide "Load more" if feasible
+- Provide download full file button
+- Do not freeze the browser
+- Detect binary files and avoid rendering binary as text
+- Default to UTF-8 but handle invalid encoding gracefully
+
+F) Source code files
+
+Support syntax highlighting for:
+- js
+- jsx
+- ts
+- tsx
+- html
+- css
+- scss
+- json
+- go
+- py
+- java
+- c
+- cpp
+- h
+- hpp
+- cs
+- php
+- rb
+- rs
+- swift
+- kt
+- sh
+- bash
+- zsh
+- ps1
+- sql
+- yaml
+- xml
+- dockerfile
+- makefile
+- nginx config
+- many common code formats
+
+Security:
+- Do not render HTML as live HTML.
+- Show HTML source code as text.
+- Never execute uploaded code.
+
+G) CSV
+
+Support CSV table preview:
+- Show first N rows
+- Detect delimiter if possible
+- Handle large CSV safely
+- Do not load entire CSV into memory
+- Optional pagination/chunk loading
+- Download button for full file
+
+H) Office documents
+
+Support preview for:
+- doc
+- docx
+- xls
+- xlsx
+- ppt
+- pptx
+- odt
+- ods
+- odp
+- rtf if possible
+
+Preferred implementation:
+- Use a Dockerized preview worker with LibreOffice headless
+- Convert Office files to PDF
+- Store generated PDF in preview cache storage
+- Preview converted PDF in frontend
+- Conversion should be asynchronous
+- UI should show:
+  - "Generating preview..."
+  - spinner/progress state
+  - retry if failed
+  - fallback download if conversion fails
+
+Important:
+- Do not require LibreOffice on host.
+- Do not block backend request for a long time.
+- Store preview status in database.
+- Cache converted preview.
+- Invalidate preview if file changes.
+- Converted preview must only be accessible after auth/share permission check.
+- Never expose internal preview paths.
+
+I) Archives
+
+Support metadata/fallback for:
+- zip
+- rar
+- 7z
+- tar
+- gz
+- bz2
+
+At minimum:
+- Show archive metadata
+- Show download button
+
+Optional:
+- List archive contents safely with limits
+- Do not auto-extract archives without strict safety limits
+
+J) Unsupported binary files
+
+- Show generic file icon
+- Show metadata
+- Show download button if allowed
+- Do not attempt unsafe rendering
+
+================================================================================
+SHARING REQUIREMENTS
+================================================================================
+
+Public sharing is a core feature.
+
+Share link requirements:
+- Generate public links for files and folders
+- Example:
+  https://space.example.com/s/randomSecureToken
+- Token must be cryptographically secure and unguessable.
+- Share links can be created from private dashboard.
+- Share links can be revoked.
+- Share links can be copied.
+- Share link list can be viewed by owner/admin.
+- Optional password protection.
+- Optional expiration date.
+- Optional download limit.
+- Optional allow preview.
+- Optional allow download.
+- Optional folder browsing.
+- Public link access must be logged in audit logs if enabled.
+
+File share:
+- Public user can open share link.
+- Public user can see file metadata.
+- Public user can preview supported file if allowed.
+- Public user can download file if allowed.
+
+Folder share:
+- Public user can open share link.
+- Public user can browse folder contents.
+- Public user can enter subfolders within shared folder boundary.
+- Public user must never escape shared folder root.
+- Public user can preview supported files if allowed.
+- Public user can download individual files if allowed.
+- Public user can download entire folder as ZIP if allowed.
+
+Share security:
+- Do not expose internal file IDs if avoidable.
+- Do not expose real storage paths.
+- Validate token securely.
+- If share password is configured, store password hash using Argon2id.
+- Rate limit password attempts.
+- Allow revoking share links.
+- Enforce expiration.
+- Enforce download count if implemented.
+- Enforce admin global sharing settings.
+
+Public share UI:
+- Minimal and beautiful
+- Shows app name/logo
+- Shows shared file/folder name
+- Shows breadcrumb inside shared folder
+- Shows file list for shared folders
+- Shows preview modal/page
+- Shows download buttons based on permissions
+- Shows password prompt when needed
+- Shows expired/revoked link page
+- Shows clear error messages
+
+================================================================================
+ADMIN PANEL AND SYSTEM SETTINGS - VERY IMPORTANT
+================================================================================
+
+The application must include a complete Admin Panel for managing system settings.
+
+Admin Panel route:
+- /admin
+
+Only authenticated admin users can access it.
+
+The Admin Panel must have a clean, modern, minimal UI consistent with the rest of the application.
+
+Admin Panel sections:
+
+1. General Settings
+
+Allow admin to configure global application settings.
+
+Settings should include:
+- App name
+  Default: Space
+- Public base URL
+  Example: https://space.example.com
+- Default language if implemented
+- Theme options if implemented:
+  - light
+  - dark
+  - system
+
+2. Upload Settings
+
+Admin must be able to configure upload behavior.
+
+Required settings:
+
+A) Maximum file size
+- Admin can set maximum allowed file size.
+- Supported modes:
+  - Unlimited
+  - Custom size
+
+Examples:
+- Unlimited
+- 100 MB
+- 1 GB
+- 10 GB
+- 100 GB
+
+Important:
+- Default should be Unlimited unless configured otherwise.
+- "Unlimited" means no software-level app limit.
+- Real limits still depend on disk, filesystem, browser, network, reverse proxy, and server resources.
+- If a max file size is configured, backend must enforce it securely.
+- Frontend validation is not enough.
+- Backend must reject files larger than configured limit.
+- Resumable/chunked uploads must also respect this limit.
+- If using tus, check Upload-Length before accepting upload.
+- If Upload-Length is unknown, enforce the limit as bytes are received.
+- Return a clear error message when file size exceeds the limit.
+- Frontend must show the configured maximum file size in the upload UI.
+
+B) Maximum total storage per user
+
+Optional but recommended:
+- Unlimited
+- Custom quota
+
+Examples:
+- Unlimited
+- 10 GB
+- 100 GB
+- 1 TB
+
+Backend must enforce user storage quota if configured.
+
+C) Allowed file types
+
+Default:
+- Allow all file types
+
+Optional:
+- Admin can configure blocked extensions or blocked MIME types.
+- By default, do not block anything.
+
+D) Maximum concurrent uploads
+
+Allow admin to configure:
+- max concurrent uploads per user
+- max concurrent chunks per upload if using chunked/tus upload
+
+E) Upload chunk size
+
+If custom chunk upload is used, allow admin to configure default/recommended chunk size.
+If tus is used, frontend may still configure chunk size.
+
+F) Upload session expiration
+
+Allow admin to configure how long incomplete upload sessions are kept before cleanup.
+
+Examples:
+- 24 hours
+- 7 days
+- 30 days
+
+3. Download Settings
+
+Admin can configure download behavior.
+
+Settings:
+- Enable/disable public downloads globally
+- Enable/disable folder ZIP download
+- Maximum folder ZIP size if desired
+- Download rate limit if implemented
+- Public share download behavior
+
+Important:
+- File downloads must still support streaming and Range requests.
+- Large downloads must not be loaded into memory.
+
+4. Sharing Settings
+
+Admin can configure sharing behavior.
+
+Settings:
+- Enable/disable public sharing globally
+- Require password for public share links:
+  - always required
+  - optional
+  - disabled
+- Maximum share expiration duration
+- Allow permanent share links:
+  - yes/no
+- Allow folder sharing:
+  - yes/no
+- Allow public preview:
+  - yes/no
+- Allow public downloads:
+  - yes/no
+- Default share expiration
+- Default download permission
+- Maximum download count setting if desired
+
+5. Preview Settings
+
+Admin can configure preview behavior.
+
+Settings:
+- Enable/disable preview globally
+- Enable/disable public share preview
+- Enable/disable Office document preview
+- Enable/disable video/audio preview
+- Enable/disable image thumbnails
+- Enable/disable text/code preview
+- Maximum text preview size
+- Maximum CSV preview rows
+- Maximum file size for automatic preview generation
+- Office conversion timeout
+- Preview cache cleanup policy
+
+Examples:
+- Text preview limit: 1 MB
+- CSV preview rows: 500
+- Office conversion timeout: 120 seconds
+- Auto-generate previews only for files under 100 MB
+
+6. User Management
+
+Admin Panel should include user management if multi-user support is implemented.
+
+Features:
+- List users
+- Create user
+- Edit username
+- Change password
+- Enable/disable user
+- Assign role:
+  - admin
+  - user
+- Set per-user storage quota
+- View used storage
+- Delete user or deactivate user
+
+If MVP is single-admin only:
+- Still design database and code so multi-user can be added later.
+- At minimum provide admin password change.
+
+7. Storage Management
+
+Admin can view storage information.
+
+Display:
+- Total used storage
+- Number of files
+- Number of folders
+- Storage path/type
+- Available disk space if possible
+- Preview cache size
+- Incomplete uploads size
+- Trash/deleted files size if soft delete is implemented
+
+Admin actions:
+- Clean expired upload sessions
+- Clean failed preview jobs
+- Clear preview cache
+- Recalculate storage usage
+- Optional: empty trash
+
+8. System Logs and Audit Logs
+
+Admin Panel should show important logs/events.
+
+Audit log examples:
+- login success
+- login failure
+- file uploaded
+- file deleted
+- folder created
+- share link created
+- share link revoked
+- public share accessed
+- failed share password attempt
+- admin setting changed
+
+Admin can filter logs by:
+- date
+- user
+- action
+- target type
+
+9. Security Settings
+
+Admin can configure security-related options.
+
+Settings:
+- Session expiration time
+- Login rate limit
+- Share password rate limit
+- Enable/disable registration if registration exists
+- Force HTTPS awareness behind reverse proxy
+- Allowed CORS origins if needed
+- CSP mode if configurable
+
+10. Backup and Maintenance
+
+Admin Panel can show backup/maintenance information.
+
+At minimum:
+- Show instructions/status for backup scripts
+- Show database backup location if configured
+- Show storage volume information
+
+Optional:
+- Trigger backup from admin panel
+- Download backup metadata
+- Restore should be handled carefully and may remain CLI-only for safety
+
+================================================================================
+ADMIN SETTINGS DATABASE DESIGN
+================================================================================
+
+Create a system_settings table.
+
+Suggested schema:
+
+system_settings:
+- id
+- key unique not null
+- value jsonb not null
+- value_type varchar not null
+- description text nullable
+- is_public boolean default false
+- created_at
+- updated_at
+
+Example setting keys:
+- app.name
+- app.public_base_url
+- upload.max_file_size_bytes
+- upload.max_file_size_mode
+- upload.max_concurrent_uploads_per_user
+- upload.session_expiration_hours
+- storage.default_user_quota_bytes
+- sharing.enabled
+- sharing.public_preview_enabled
+- sharing.public_download_enabled
+- sharing.default_expiration_hours
+- preview.enabled
+- preview.office_enabled
+- preview.text_max_bytes
+- preview.csv_max_rows
+- preview.office_conversion_timeout_seconds
+- security.session_ttl_hours
+- security.login_rate_limit_per_minute
+
+For unlimited values:
+Use either:
+- null value
+or
+- mode = "unlimited"
+
+Example:
+upload.max_file_size_mode = "unlimited"
+upload.max_file_size_bytes = null
+
+Or:
+upload.max_file_size_mode = "custom"
+upload.max_file_size_bytes = 10737418240
+
+Admin setting changes must be validated server-side.
+Admin setting changes should be written to audit_logs.
+
+================================================================================
+ADMIN API DESIGN
+================================================================================
+
+Add admin-only API endpoints.
+
+Admin Settings:
+- GET /api/admin/settings
+- PATCH /api/admin/settings
+- GET /api/admin/settings/public
+
+Upload settings:
+- GET /api/admin/settings/upload
+- PATCH /api/admin/settings/upload
+
+Sharing settings:
+- GET /api/admin/settings/sharing
+- PATCH /api/admin/settings/sharing
+
+Preview settings:
+- GET /api/admin/settings/preview
+- PATCH /api/admin/settings/preview
+
+Users:
+- GET /api/admin/users
+- POST /api/admin/users
+- GET /api/admin/users/:id
+- PATCH /api/admin/users/:id
+- DELETE /api/admin/users/:id
+- POST /api/admin/users/:id/change-password
+
+Storage:
+- GET /api/admin/storage/summary
+- POST /api/admin/storage/recalculate
+- POST /api/admin/storage/cleanup-expired-uploads
+- POST /api/admin/storage/cleanup-preview-cache
+
+Logs:
+- GET /api/admin/audit-logs
+
+System:
+- GET /api/admin/system/health
+- GET /api/admin/system/info
+
+All /api/admin/* endpoints must:
+- Require authentication
+- Require admin role
+- Return 403 for non-admin users
+- Validate input
+- Log important changes
+
+================================================================================
+ADMIN PANEL FRONTEND PAGES
+================================================================================
+
+Required pages:
+- /admin
+  Admin overview dashboard
+
+- /admin/settings
+  General settings
+
+- /admin/settings/upload
+  Upload settings including max file size
+
+- /admin/settings/sharing
+  Sharing settings
+
+- /admin/settings/preview
+  Preview settings
+
+- /admin/users
+  User management if multi-user is implemented
+
+- /admin/storage
+  Storage summary and cleanup actions
+
+- /admin/logs
+  Audit logs
+
+Admin UI requirements:
+- Use shadcn/ui components
+- Use clean cards and forms
+- Use tabs where appropriate
+- Use switches, selects, inputs, sliders if useful
+- Use confirmation dialogs for destructive actions
+- Use toast notifications
+- Use loading skeletons
+- Use error states
+- Use optimistic UI carefully only where safe
+- Protect admin routes on frontend and backend
+
+================================================================================
+AUTHENTICATION AND AUTHORIZATION
+================================================================================
+
+Authentication:
+- Secure username/password login
+- Argon2id password hashing
+- Secure cookie-based session
+- HttpOnly cookies
+- Secure cookies in production
+- SameSite cookie policy
+- CSRF protection where needed
+- Logout
+- Session expiration
+- Admin password change
+
+Authorization:
+- Role-based access:
+  - admin
+  - user
+- Admin-only routes
+- Owner-based file/folder access
+- Share-token-based public access
+- Never rely only on frontend checks
+- Enforce all permissions on backend
+
+Security:
+- Rate limit login attempts
+- Rate limit share password attempts
+- Audit login failures
+- Do not reveal whether username exists
+- Use generic auth error messages
+
+================================================================================
+DATABASE SCHEMA
+================================================================================
+
+Use PostgreSQL.
+
+Suggested tables:
+
+users:
+- id uuid primary key
+- username text unique not null
+- password_hash text not null
+- role text not null default 'user'
+- is_active boolean default true
+- storage_quota_bytes bigint nullable
+- used_storage_bytes bigint default 0
+- created_at timestamptz
+- updated_at timestamptz
+
+sessions:
+- id uuid primary key
+- user_id uuid references users(id)
+- token_hash text unique not null
+- expires_at timestamptz not null
+- created_at timestamptz
+- last_seen_at timestamptz
+- ip_address text nullable
+- user_agent text nullable
+
+folders:
+- id uuid primary key
+- owner_id uuid references users(id)
+- parent_id uuid references folders(id) nullable
+- name text not null
+- path_cache text nullable
+- created_at timestamptz
+- updated_at timestamptz
+- deleted_at timestamptz nullable
+- unique(owner_id, parent_id, name) where deleted_at is null
+
+files:
+- id uuid primary key
+- owner_id uuid references users(id)
+- folder_id uuid references folders(id)
+- name text not null
+- original_name text not null
+- storage_key text not null
+- size_bytes bigint not null
+- mime_type text nullable
+- extension text nullable
+- checksum_sha256 text nullable
+- status text not null
+  - uploading
+  - ready
+  - failed
+  - deleted
+- created_at timestamptz
+- updated_at timestamptz
+- deleted_at timestamptz nullable
+- unique(owner_id, folder_id, name) where deleted_at is null
+
+upload_sessions:
+- id uuid primary key
+- owner_id uuid references users(id)
+- folder_id uuid references folders(id)
+- file_id uuid references files(id) nullable
+- upload_protocol text
+  - tus
+  - custom
+  - simple
+- original_name text not null
+- target_name text not null
+- total_size_bytes bigint nullable
+- uploaded_bytes bigint default 0
+- storage_key_temp text not null
+- status text not null
+  - initialized
+  - uploading
+  - paused
+  - completed
+  - failed
+  - canceled
+  - expired
+- error_message text nullable
+- expires_at timestamptz
+- created_at timestamptz
+- updated_at timestamptz
+
+share_links:
+- id uuid primary key
+- owner_id uuid references users(id)
+- target_type text not null
+  - file
+  - folder
+- target_id uuid not null
+- token_hash text unique not null
+- token_preview text nullable
+- password_hash text nullable
+- expires_at timestamptz nullable
+- allow_preview boolean default true
+- allow_download boolean default true
+- allow_folder_browse boolean default true
+- max_downloads int nullable
+- download_count int default 0
+- is_revoked boolean default false
+- created_at timestamptz
+- updated_at timestamptz
+
+preview_jobs:
+- id uuid primary key
+- file_id uuid references files(id)
+- job_type text not null
+  - office_to_pdf
+  - thumbnail
+  - metadata
+- status text not null
+  - queued
+  - processing
+  - completed
+  - failed
+- output_storage_key text nullable
+- error_message text nullable
+- attempts int default 0
+- created_at timestamptz
+- updated_at timestamptz
+
+file_previews:
+- id uuid primary key
+- file_id uuid references files(id)
+- preview_type text not null
+  - thumbnail
+  - pdf
+  - metadata
+- storage_key text nullable
+- mime_type text nullable
+- size_bytes bigint nullable
+- status text not null
+- created_at timestamptz
+- updated_at timestamptz
+
+system_settings:
+- id uuid primary key
+- key text unique not null
+- value jsonb not null
+- value_type text not null
+- description text nullable
+- is_public boolean default false
+- created_at timestamptz
+- updated_at timestamptz
+
+audit_logs:
+- id uuid primary key
+- user_id uuid references users(id) nullable
+- action text not null
+- target_type text nullable
+- target_id uuid nullable
+- ip_address text nullable
+- user_agent text nullable
+- metadata jsonb nullable
+- created_at timestamptz
+
+================================================================================
+STORAGE DESIGN
+================================================================================
+
+Default storage:
+- Local filesystem inside Docker volume.
+
+Storage must be abstracted:
+
+Storage interface should support:
+- PutStream(ctx, key, reader)
+- GetStream(ctx, key)
+- GetRangeStream(ctx, key, start, end)
+- Delete(ctx, key)
+- Exists(ctx, key)
+- Stat(ctx, key)
+- Move/Copy if needed
+
+Storage rules:
+- Never trust user-provided paths.
+- Never use raw file names as direct filesystem paths.
+- Generate internal storage keys.
+- Organize files by user/file ID or hashed path.
+- Prevent path traversal.
+- Use temporary paths for incomplete uploads.
+- Atomically move/mark files complete after upload finalization.
+- Keep metadata in database.
+
+Example local storage layout:
+/data/storage/files/...
+/data/storage/tmp/uploads/...
+/data/storage/previews/...
+
+Optional future storage:
+- MinIO/S3 through same interface.
+
+================================================================================
+API DESIGN
+================================================================================
+
+Auth:
+- POST /api/auth/login
+- POST /api/auth/logout
+- GET /api/auth/me
+- POST /api/auth/change-password
+
+Folders:
+- GET /api/folders
+- GET /api/folders/:id
+- POST /api/folders
+- PATCH /api/folders/:id
+- DELETE /api/folders/:id
+- POST /api/folders/:id/move
+
+Files:
+- GET /api/files/:id
+- PATCH /api/files/:id
+- DELETE /api/files/:id
+- POST /api/files/:id/move
+- GET /api/files/:id/download
+- GET /api/files/:id/preview
+- GET /api/files/:id/range
+- GET /api/files/:id/metadata
+
+Uploads:
+If tus is used:
+- /api/uploads/tus/*
+- Support tus creation, HEAD, PATCH, termination if enabled
+
+If custom upload is used:
+- POST /api/uploads/init
+- PATCH /api/uploads/:id/chunk
+- GET /api/uploads/:id/status
+- POST /api/uploads/:id/complete
+- DELETE /api/uploads/:id/cancel
+
+Shares:
+- POST /api/shares
+- GET /api/shares
+- GET /api/shares/:id
+- PATCH /api/shares/:id
+- DELETE /api/shares/:id
+- POST /api/shares/:id/revoke
+
+Public shares:
+- GET /api/public/shares/:token
+- POST /api/public/shares/:token/password
+- GET /api/public/shares/:token/items
+- GET /api/public/shares/:token/files/:fileId/preview
+- GET /api/public/shares/:token/files/:fileId/download
+- GET /api/public/shares/:token/folders/:folderId/download-zip
+
+Preview:
+- GET /api/files/:id/preview-info
+- POST /api/files/:id/preview-jobs
+- GET /api/files/:id/preview-content
+
+Admin:
+- GET /api/admin/settings
+- PATCH /api/admin/settings
+- GET /api/admin/settings/public
+- GET /api/admin/settings/upload
+- PATCH /api/admin/settings/upload
+- GET /api/admin/settings/sharing
+- PATCH /api/admin/settings/sharing
+- GET /api/admin/settings/preview
+- PATCH /api/admin/settings/preview
+- GET /api/admin/users
+- POST /api/admin/users
+- GET /api/admin/users/:id
+- PATCH /api/admin/users/:id
+- DELETE /api/admin/users/:id
+- POST /api/admin/users/:id/change-password
+- GET /api/admin/storage/summary
+- POST /api/admin/storage/recalculate
+- POST /api/admin/storage/cleanup-expired-uploads
+- POST /api/admin/storage/cleanup-preview-cache

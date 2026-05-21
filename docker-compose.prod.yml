@@ -1,0 +1,15 @@
+services:
+  caddy:
+    restart: always
+
+  frontend:
+    restart: always
+
+  backend:
+    restart: always
+
+  postgres:
+    restart: always
+
+  redis:
+    restart: always
