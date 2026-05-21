@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type MeResponse = {
@@ -47,6 +47,8 @@ function formatBytes(value?: number) {
 
 export default function DashboardPage() {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [loadingSession, setLoadingSession] = useState(true);
   const [me, setMe] = useState<MeResponse["user"] | null>(null);
 
@@ -63,6 +65,8 @@ export default function DashboardPage() {
 
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [shareURL, setShareURL] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -96,36 +100,32 @@ export default function DashboardPage() {
     return `/api/folders/items?${params.toString()}`;
   }, [currentParentId, order, search, sortBy]);
 
+  async function reloadItems() {
+    setLoadingItems(true);
+    setItemsError(null);
+    try {
+      const response = await fetch(queryUrl, { credentials: "include" });
+      if (response.status === 401) {
+        router.replace("/login");
+        return;
+      }
+      const data = (await response.json()) as ListItemsResponse & { error?: string };
+      if (!response.ok) {
+        throw new Error(data.error ?? "Failed to load folder items");
+      }
+      setItems(data.items ?? []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load folder items";
+      setItemsError(message);
+    } finally {
+      setLoadingItems(false);
+    }
+  }
+
   useEffect(() => {
     if (loadingSession) return;
-
-    let mounted = true;
-    (async () => {
-      setLoadingItems(true);
-      setItemsError(null);
-      try {
-        const response = await fetch(queryUrl, { credentials: "include" });
-        if (response.status === 401) {
-          router.replace("/login");
-          return;
-        }
-        const data = (await response.json()) as ListItemsResponse;
-        if (!response.ok) {
-          throw new Error((data as unknown as { error?: string }).error ?? "Failed to load folder items");
-        }
-        if (mounted) setItems(data.items ?? []);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "Failed to load folder items";
-        if (mounted) setItemsError(message);
-      } finally {
-        if (mounted) setLoadingItems(false);
-      }
-    })();
-
-    return () => {
-      mounted = false;
-    };
-  }, [loadingSession, queryUrl, router]);
+    void reloadItems();
+  }, [loadingSession, queryUrl]);
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
@@ -159,16 +159,52 @@ export default function DashboardPage() {
         throw new Error(data?.error ?? "Failed to create folder");
       }
       setNewFolderName("");
-      const listResponse = await fetch(queryUrl, { credentials: "include" });
-      const listData = (await listResponse.json()) as ListItemsResponse;
-      if (listResponse.ok) {
-        setItems(listData.items ?? []);
-      }
+      await reloadItems();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create folder";
       setItemsError(message);
     } finally {
       setCreatingFolder(false);
+    }
+  }
+
+  async function uploadSelectedFiles() {
+    const input = fileInputRef.current;
+    const files = input?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+
+    setUploading(true);
+    setItemsError(null);
+    setShareURL(null);
+
+    try {
+      const form = new FormData();
+      Array.from(files).forEach((file) => form.append("file", file));
+      const query = new URLSearchParams();
+      if (currentParentId) query.set("folderId", currentParentId);
+
+      const response = await fetch(`/api/files/upload?${query.toString()}`, {
+        method: "POST",
+        body: form,
+        credentials: "include",
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Upload failed");
+      }
+
+      await reloadItems();
+      if (input) {
+        input.value = "";
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Upload failed";
+      setItemsError(message);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -186,9 +222,57 @@ export default function DashboardPage() {
       if (!response.ok) {
         throw new Error(data?.error ?? "Failed to delete folder");
       }
-      setItems((prev) => prev.filter((candidate) => candidate.id !== item.id));
+      await reloadItems();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to delete folder";
+      setItemsError(message);
+    }
+  }
+
+  async function deleteFile(item: BrowserItem) {
+    if (item.type !== "file") return;
+    const accepted = window.confirm(`Delete file \"${item.name}\"?`);
+    if (!accepted) return;
+
+    try {
+      const response = await fetch(`/api/files/${item.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to delete file");
+      }
+      await reloadItems();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to delete file";
+      setItemsError(message);
+    }
+  }
+
+  async function createShare(item: BrowserItem) {
+    setShareURL(null);
+    setItemsError(null);
+    try {
+      const response = await fetch("/api/shares", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          targetType: item.type,
+          targetId: item.id,
+          allowPreview: true,
+          allowDownload: true,
+          allowFolderBrowse: true,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to create share link");
+      }
+      setShareURL(data.url ?? null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create share";
       setItemsError(message);
     }
   }
@@ -249,13 +333,23 @@ export default function DashboardPage() {
           />
         </div>
 
-        <div className="mt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-3">
           <button className="btn-primary" disabled={creatingFolder} onClick={createFolder} type="button">
             {creatingFolder ? "Creating..." : "Create Folder"}
+          </button>
+
+          <input className="input max-w-sm" multiple ref={fileInputRef} type="file" />
+          <button className="btn-primary" disabled={uploading} onClick={uploadSelectedFiles} type="button">
+            {uploading ? "Uploading..." : "Upload Files"}
           </button>
         </div>
 
         {itemsError ? <p className="mt-3 text-sm text-red-600">{itemsError}</p> : null}
+        {shareURL ? (
+          <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+            Share URL: <a className="underline" href={shareURL} rel="noreferrer" target="_blank">{shareURL}</a>
+          </div>
+        ) : null}
 
         <div className="mt-5 overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -297,13 +391,28 @@ export default function DashboardPage() {
                     <td className="px-2 py-2">{item.type === "file" ? formatBytes(item.sizeBytes) : "-"}</td>
                     <td className="px-2 py-2">{new Date(item.modifiedAt).toLocaleString()}</td>
                     <td className="px-2 py-2">
-                      {item.type === "folder" ? (
-                        <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFolder(item)} type="button">
-                          Delete
+                      <div className="flex flex-wrap gap-2">
+                        {item.type === "file" ? (
+                          <>
+                            <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${item.id}/preview`} rel="noreferrer" target="_blank">
+                              Preview
+                            </a>
+                            <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${item.id}/download`}>
+                              Download
+                            </a>
+                            <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFile(item)} type="button">
+                              Delete
+                            </button>
+                          </>
+                        ) : (
+                          <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFolder(item)} type="button">
+                            Delete
+                          </button>
+                        )}
+                        <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => createShare(item)} type="button">
+                          Share
                         </button>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
+                      </div>
                     </td>
                   </tr>
                 ))

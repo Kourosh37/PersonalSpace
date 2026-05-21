@@ -12,6 +12,14 @@ This is phase 1 implementation (foundation):
 - Initial PostgreSQL migrations
 - Offline image build/export/import scripts
 
+This phase also includes an initial working file workflow:
+- Folder CRUD + move
+- File upload (streaming multipart) with server-side max size enforcement
+- File metadata/read/rename/move/delete
+- File download + preview with HTTP Range support
+- Share link creation/revoke/list
+- Public share pages (`/s/{token}`) with optional password checks
+
 ## Quick start
 
 1. Copy env file:
@@ -66,4 +74,4 @@ See:
 ## Notes
 
 - This phase initializes production-minded structure and core modules.
-- Upload/download/preview/share engines are scaffolded for next phases.
+- Tus resumable upload, ZIP folder download, office/media preview workers, and advanced admin settings are next.

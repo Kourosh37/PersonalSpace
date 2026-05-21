@@ -12,6 +12,7 @@ import (
 	"space/backend/internal/config"
 	"space/backend/internal/db"
 	httpapi "space/backend/internal/http"
+	"space/backend/internal/storage"
 )
 
 func main() {
@@ -29,7 +30,13 @@ func main() {
 	}
 	defer pool.Close()
 
-	handler := httpapi.Handler{DB: pool, Cfg: cfg}
+	localStorage, err := storage.NewLocalStorage(cfg.StorageRoot)
+	if err != nil {
+		slog.Error("initialize local storage", "error", err)
+		os.Exit(1)
+	}
+
+	handler := httpapi.Handler{DB: pool, Cfg: cfg, Storage: localStorage}
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler.Router(),

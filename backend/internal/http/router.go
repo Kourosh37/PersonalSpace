@@ -13,6 +13,7 @@ import (
 	"space/backend/internal/config"
 	"space/backend/internal/middleware"
 	"space/backend/internal/settings"
+	"space/backend/internal/storage"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -20,8 +21,9 @@ import (
 )
 
 type Handler struct {
-	DB  *pgxpool.Pool
-	Cfg config.Config
+	DB      *pgxpool.Pool
+	Cfg     config.Config
+	Storage storage.Interface
 }
 
 func (h Handler) Router() http.Handler {
@@ -40,6 +42,8 @@ func (h Handler) Router() http.Handler {
 		})
 
 		h.registerFolderRoutes(api, authMW)
+		h.registerFileRoutes(api, authMW)
+		h.registerShareRoutes(api, authMW)
 
 		api.With(authMW.RequireAuth, authMW.RequireAdmin).Route("/admin", func(admin chi.Router) {
 			admin.Get("/system/health", func(w http.ResponseWriter, r *http.Request) {

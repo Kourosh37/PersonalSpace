@@ -44,6 +44,7 @@ func (h Handler) registerFolderRoutes(api chi.Router, authMW middleware.AuthMidd
 	api.With(authMW.RequireAuth).Post("/folders", h.createFolder)
 	api.With(authMW.RequireAuth).Patch("/folders/{id}", h.renameFolder)
 	api.With(authMW.RequireAuth).Delete("/folders/{id}", h.deleteFolder)
+	api.With(authMW.RequireAuth).Post("/folders/{id}/move", h.moveFolder)
 }
 
 func (h Handler) listFolderItems(w http.ResponseWriter, r *http.Request) {
@@ -315,6 +316,88 @@ func (h Handler) deleteFolder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.insertAudit(r.Context(), &user.ID, "folder.deleted", "folder", &folderID, clientIP(r), r.UserAgent(), map[string]any{})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type moveFolderRequest struct {
+	ParentID *string `json:"parentId"`
+}
+
+func (h Handler) moveFolder(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	folderID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(folderID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder id"})
+		return
+	}
+
+	var req moveFolderRequest
+	if err := ReadJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	parentID, err := optionalUUIDPtr(req.ParentID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if parentID != nil && *parentID == folderID {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot move folder into itself"})
+		return
+	}
+
+	if err := h.validateParentOwnership(r, user.ID, parentID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if parentID != nil {
+		var isDescendant bool
+		err := h.DB.QueryRow(r.Context(), `
+			WITH RECURSIVE subtree AS (
+				SELECT id FROM folders WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL
+				UNION ALL
+				SELECT f.id FROM folders f JOIN subtree s ON f.parent_id = s.id
+				WHERE f.owner_id=$2 AND f.deleted_at IS NULL
+			)
+			SELECT EXISTS(SELECT 1 FROM subtree WHERE id=$3)
+		`, folderID, user.ID, *parentID).Scan(&isDescendant)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not validate destination folder"})
+			return
+		}
+		if isDescendant {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cannot move folder into its own subtree"})
+			return
+		}
+	}
+
+	cmd, err := h.DB.Exec(r.Context(), `
+		UPDATE folders
+		SET parent_id=$1, updated_at=now()
+		WHERE id=$2 AND owner_id=$3 AND deleted_at IS NULL
+	`, parentID, folderID, user.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "an item with this name already exists in destination folder"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not move folder"})
+		return
+	}
+	if cmd.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "folder.moved", "folder", &folderID, clientIP(r), r.UserAgent(), map[string]any{"parentId": parentID})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

@@ -31,6 +31,14 @@
 - `upload.max_file_size_mode`: `unlimited|custom`
 - `upload.max_file_size_bytes`: nullable bigint in JSON value
 
+## Implemented APIs (current)
+
+- Auth: `login`, `logout`, `me`
+- Folders: list items, create, rename, delete, move
+- Files: upload, metadata, rename, delete, move, download, preview (Range)
+- Shares: create/list/revoke + public share info/items/file download/file preview
+- Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
+
 ## Next phases
 
 - Resumable upload (tus/custom chunked)

@@ -1,0 +1,623 @@
+package httpapi
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"space/backend/internal/middleware"
+	"space/backend/internal/settings"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+var errUploadExceeded = errors.New("file exceeds the maximum allowed upload size")
+
+type uploadedFileResult struct {
+	ID           string `json:"id,omitempty"`
+	Name         string `json:"name,omitempty"`
+	OriginalName string `json:"originalName,omitempty"`
+	SizeBytes    int64  `json:"sizeBytes,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+func (h Handler) registerFileRoutes(api chi.Router, authMW middleware.AuthMiddleware) {
+	api.With(authMW.RequireAuth).Post("/files/upload", h.uploadFiles)
+	api.With(authMW.RequireAuth).Get("/files/{id}", h.getFileMetadata)
+	api.With(authMW.RequireAuth).Get("/files/{id}/metadata", h.getFileMetadata)
+	api.With(authMW.RequireAuth).Get("/files/{id}/download", h.downloadFile)
+	api.With(authMW.RequireAuth).Get("/files/{id}/preview", h.previewFile)
+	api.With(authMW.RequireAuth).Patch("/files/{id}", h.renameFile)
+	api.With(authMW.RequireAuth).Delete("/files/{id}", h.deleteFile)
+	api.With(authMW.RequireAuth).Post("/files/{id}/move", h.moveFile)
+}
+
+func (h Handler) uploadFiles(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	folderID, err := optionalUUIDFromQuery(r, "folderId")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.validateParentOwnership(r, user.ID, folderID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	uploadCfg, err := settings.GetUploadSettings(r.Context(), h.DB)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read upload settings"})
+		return
+	}
+
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expected multipart/form-data body"})
+		return
+	}
+
+	results := make([]uploadedFileResult, 0, 8)
+	created := 0
+
+	for {
+		part, err := mr.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart data"})
+			return
+		}
+
+		if part.FormName() != "file" {
+			_ = part.Close()
+			continue
+		}
+
+		originalName := strings.TrimSpace(part.FileName())
+		if originalName == "" {
+			_ = part.Close()
+			continue
+		}
+
+		targetName := normalizeNodeName(filepath.Base(originalName))
+		if targetName == "" {
+			_ = part.Close()
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "invalid file name"})
+			continue
+		}
+
+		fileID := uuid.NewString()
+		tmpKey := fmt.Sprintf("tmp/uploads/%s/%s.part", user.ID, fileID)
+		finalKey := fmt.Sprintf("files/%s/%s/%s.bin", user.ID, time.Now().UTC().Format("2006/01/02"), fileID)
+
+		size, checksum, mimeType, ext, copyErr := h.copyPartToStorage(r.Context(), part, tmpKey, uploadCfg.MaxFileSizeBytes)
+		_ = part.Close()
+		if copyErr != nil {
+			_ = h.Storage.Delete(r.Context(), tmpKey)
+			status := http.StatusBadRequest
+			message := copyErr.Error()
+			if errors.Is(copyErr, errUploadExceeded) {
+				status = http.StatusRequestEntityTooLarge
+				message = "This file exceeds the maximum allowed upload size."
+			}
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: message})
+			if status == http.StatusRequestEntityTooLarge {
+				writeJSON(w, status, map[string]any{"results": results})
+				return
+			}
+			continue
+		}
+
+		if err := h.Storage.Move(r.Context(), tmpKey, finalKey); err != nil {
+			_ = h.Storage.Delete(r.Context(), tmpKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not finalize uploaded file"})
+			continue
+		}
+
+		now := time.Now().UTC()
+		tx, err := h.DB.Begin(r.Context())
+		if err != nil {
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not persist file metadata"})
+			continue
+		}
+
+		_, err = tx.Exec(r.Context(), `
+			INSERT INTO files (id, owner_id, folder_id, name, original_name, storage_key, size_bytes, mime_type, extension, checksum_sha256, status, created_at, updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ready',$11,$12)
+		`, fileID, user.ID, folderID, targetName, originalName, finalKey, size, mimeTypeOrNil(mimeType), extOrNil(ext), checksum, now, now)
+		if err != nil {
+			tx.Rollback(r.Context())
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			if isUniqueViolation(err) {
+				results = append(results, uploadedFileResult{OriginalName: originalName, Error: "an item with this name already exists in this folder"})
+				continue
+			}
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not persist file metadata"})
+			continue
+		}
+
+		_, err = tx.Exec(r.Context(), `UPDATE users SET used_storage_bytes = used_storage_bytes + $1, updated_at = now() WHERE id=$2`, size, user.ID)
+		if err != nil {
+			tx.Rollback(r.Context())
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not update user usage"})
+			continue
+		}
+
+		if err := tx.Commit(r.Context()); err != nil {
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not commit upload"})
+			continue
+		}
+
+		created++
+		h.insertAudit(r.Context(), &user.ID, "file.uploaded", "file", &fileID, clientIP(r), r.UserAgent(), map[string]any{"name": targetName, "size": size})
+		results = append(results, uploadedFileResult{ID: fileID, Name: targetName, OriginalName: originalName, SizeBytes: size})
+	}
+
+	status := http.StatusCreated
+	if created == 0 {
+		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, map[string]any{"results": results})
+}
+
+func (h Handler) copyPartToStorage(ctx context.Context, part io.Reader, storageKey string, maxBytes *int64) (size int64, checksum string, detectedMIME string, extension string, err error) {
+	hasher := sha256.New()
+	buffer := make([]byte, 32*1024)
+	sniff := make([]byte, 0, 512)
+
+	pr, pw := io.Pipe()
+	copyErrCh := make(chan error, 1)
+
+	go func() {
+		defer pw.Close()
+		for {
+			n, readErr := part.Read(buffer)
+			if n > 0 {
+				chunk := buffer[:n]
+				if maxBytes != nil && size+int64(n) > *maxBytes {
+					copyErrCh <- errUploadExceeded
+					return
+				}
+				size += int64(n)
+				if len(sniff) < 512 {
+					need := 512 - len(sniff)
+					if need > n {
+						need = n
+					}
+					sniff = append(sniff, chunk[:need]...)
+				}
+				if _, err := hasher.Write(chunk); err != nil {
+					copyErrCh <- err
+					return
+				}
+				if _, err := pw.Write(chunk); err != nil {
+					copyErrCh <- err
+					return
+				}
+			}
+
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					copyErrCh <- nil
+					return
+				}
+				copyErrCh <- readErr
+				return
+			}
+		}
+	}()
+
+	storeErr := h.Storage.PutStream(ctx, storageKey, pr)
+	streamErr := <-copyErrCh
+
+	if streamErr != nil {
+		_ = pr.CloseWithError(streamErr)
+		return 0, "", "", "", streamErr
+	}
+	if storeErr != nil {
+		return 0, "", "", "", storeErr
+	}
+
+	detectedMIME = http.DetectContentType(sniff)
+	checksum = hex.EncodeToString(hasher.Sum(nil))
+	if exts, _ := mime.ExtensionsByType(detectedMIME); len(exts) > 0 {
+		extension = strings.TrimPrefix(exts[0], ".")
+	}
+	return size, checksum, detectedMIME, extension, nil
+}
+
+func mimeTypeOrNil(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
+}
+
+func extOrNil(v string) any {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return v
+}
+
+type fileRecord struct {
+	ID           string
+	OwnerID      string
+	FolderID     *string
+	Name         string
+	OriginalName string
+	StorageKey   string
+	SizeBytes    int64
+	MimeType     *string
+	Extension    *string
+	UpdatedAt    time.Time
+}
+
+func (h Handler) fetchOwnedFile(ctx context.Context, userID string, fileID string) (fileRecord, error) {
+	var rec fileRecord
+	err := h.DB.QueryRow(ctx, `
+		SELECT id, owner_id, folder_id, name, original_name, storage_key, size_bytes, mime_type, extension, updated_at
+		FROM files
+		WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL
+	`, fileID, userID).Scan(&rec.ID, &rec.OwnerID, &rec.FolderID, &rec.Name, &rec.OriginalName, &rec.StorageKey, &rec.SizeBytes, &rec.MimeType, &rec.Extension, &rec.UpdatedAt)
+	if err != nil {
+		return fileRecord{}, err
+	}
+	return rec, nil
+}
+
+func (h Handler) getFileMetadata(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":           rec.ID,
+		"name":         rec.Name,
+		"originalName": rec.OriginalName,
+		"folderId":     rec.FolderID,
+		"sizeBytes":    rec.SizeBytes,
+		"mimeType":     rec.MimeType,
+		"extension":    rec.Extension,
+		"updatedAt":    rec.UpdatedAt,
+	})
+}
+
+func (h Handler) previewFile(w http.ResponseWriter, r *http.Request) {
+	h.streamOwnedFile(w, r, true)
+}
+
+func (h Handler) downloadFile(w http.ResponseWriter, r *http.Request) {
+	h.streamOwnedFile(w, r, false)
+}
+
+func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline bool) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file metadata"})
+		return
+	}
+
+	obj, err := h.Storage.Stat(r.Context(), rec.StorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
+	}
+
+	mimeType := "application/octet-stream"
+	if rec.MimeType != nil && *rec.MimeType != "" {
+		mimeType = *rec.MimeType
+	}
+
+	dispositionType := "attachment"
+	if inline {
+		dispositionType = "inline"
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("ETag", obj.ETag)
+	w.Header().Set("Last-Modified", rec.UpdatedAt.UTC().Format(http.TimeFormat))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", dispositionType, rec.OriginalName))
+
+	rangeHeader := strings.TrimSpace(r.Header.Get("Range"))
+	if rangeHeader == "" {
+		w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
+		stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not open file"})
+			return
+		}
+		defer stream.Close()
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, stream)
+		return
+	}
+
+	start, end, ok := parseSingleRange(rangeHeader, obj.Size)
+	if !ok {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", obj.Size))
+		writeJSON(w, http.StatusRequestedRangeNotSatisfiable, map[string]string{"error": "invalid range"})
+		return
+	}
+
+	stream, err := h.Storage.GetRangeStream(r.Context(), rec.StorageKey, start, end)
+	if err != nil {
+		writeJSON(w, http.StatusRequestedRangeNotSatisfiable, map[string]string{"error": "invalid range"})
+		return
+	}
+	defer stream.Close()
+
+	length := end - start + 1
+	w.Header().Set("Content-Length", strconv.FormatInt(length, 10))
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
+	w.WriteHeader(http.StatusPartialContent)
+	_, _ = io.Copy(w, stream)
+}
+
+func parseSingleRange(header string, size int64) (start int64, end int64, ok bool) {
+	if !strings.HasPrefix(header, "bytes=") {
+		return 0, 0, false
+	}
+	value := strings.TrimPrefix(header, "bytes=")
+	if strings.Contains(value, ",") {
+		return 0, 0, false
+	}
+
+	parts := strings.SplitN(value, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+
+	left := strings.TrimSpace(parts[0])
+	right := strings.TrimSpace(parts[1])
+
+	if left == "" {
+		suffix, err := strconv.ParseInt(right, 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, false
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size - 1, true
+	}
+
+	start, err := strconv.ParseInt(left, 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, false
+	}
+
+	if right == "" {
+		return start, size - 1, true
+	}
+
+	end, err = strconv.ParseInt(right, 10, 64)
+	if err != nil || end < start {
+		return 0, 0, false
+	}
+	if end >= size {
+		end = size - 1
+	}
+
+	return start, end, true
+}
+
+type renameFileRequest struct {
+	Name string `json:"name"`
+}
+
+func (h Handler) renameFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	var req renameFileRequest
+	if err := ReadJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	name := normalizeNodeName(req.Name)
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		return
+	}
+
+	cmd, err := h.DB.Exec(r.Context(), `
+		UPDATE files
+		SET name=$1, updated_at=now()
+		WHERE id=$2 AND owner_id=$3 AND deleted_at IS NULL
+	`, name, fileID, user.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "an item with this name already exists in this folder"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not rename file"})
+		return
+	}
+	if cmd.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "file.renamed", "file", &fileID, clientIP(r), r.UserAgent(), map[string]any{"name": name})
+	writeJSON(w, http.StatusOK, map[string]any{"id": fileID, "name": name})
+}
+
+type moveFileRequest struct {
+	FolderID *string `json:"folderId"`
+}
+
+func (h Handler) moveFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	var req moveFileRequest
+	if err := ReadJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	folderID, err := optionalUUIDPtr(req.FolderID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.validateParentOwnership(r, user.ID, folderID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	cmd, err := h.DB.Exec(r.Context(), `
+		UPDATE files
+		SET folder_id=$1, updated_at=now()
+		WHERE id=$2 AND owner_id=$3 AND deleted_at IS NULL
+	`, folderID, fileID, user.ID)
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "an item with this name already exists in destination folder"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not move file"})
+		return
+	}
+	if cmd.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "file.moved", "file", &fileID, clientIP(r), r.UserAgent(), map[string]any{"folderId": folderID})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h Handler) deleteFile(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file metadata"})
+		return
+	}
+
+	tx, err := h.DB.Begin(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not begin delete transaction"})
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	cmd, err := tx.Exec(r.Context(), `
+		UPDATE files
+		SET deleted_at=now(), status='deleted', updated_at=now()
+		WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL
+	`, fileID, user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not delete file"})
+		return
+	}
+	if cmd.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+		return
+	}
+
+	if _, err := tx.Exec(r.Context(), `UPDATE users SET used_storage_bytes = GREATEST(0, used_storage_bytes - $1), updated_at=now() WHERE id=$2`, rec.SizeBytes, user.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not update usage"})
+		return
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not commit delete"})
+		return
+	}
+
+	_ = h.Storage.Delete(r.Context(), rec.StorageKey)
+	h.insertAudit(r.Context(), &user.ID, "file.deleted", "file", &fileID, clientIP(r), r.UserAgent(), map[string]any{})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
