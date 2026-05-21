@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,6 +37,9 @@ func (h Handler) registerFileRoutes(api chi.Router, authMW middleware.AuthMiddle
 	api.With(authMW.RequireAuth).Post("/files/upload", h.uploadFiles)
 	api.With(authMW.RequireAuth).Get("/files/{id}", h.getFileMetadata)
 	api.With(authMW.RequireAuth).Get("/files/{id}/metadata", h.getFileMetadata)
+	api.With(authMW.RequireAuth).Get("/files/{id}/preview-info", h.getFilePreviewInfo)
+	api.With(authMW.RequireAuth).Get("/files/{id}/preview-content", h.getFilePreviewContent)
+	api.With(authMW.RequireAuth).Post("/files/{id}/preview-jobs", h.createFilePreviewJob)
 	api.With(authMW.RequireAuth).Get("/files/{id}/download", h.downloadFile)
 	api.With(authMW.RequireAuth).Get("/files/{id}/preview", h.previewFile)
 	api.With(authMW.RequireAuth).Patch("/files/{id}", h.renameFile)
@@ -319,6 +323,208 @@ func (h Handler) getFileMetadata(w http.ResponseWriter, r *http.Request) {
 		"extension":    rec.Extension,
 		"updatedAt":    rec.UpdatedAt,
 	})
+}
+
+func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	category, method, supported := detectPreviewMode(rec)
+	textMaxBytes := h.previewTextMaxBytes(r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":           rec.ID,
+		"name":             rec.Name,
+		"mimeType":         rec.MimeType,
+		"sizeBytes":        rec.SizeBytes,
+		"category":         category,
+		"method":           method,
+		"supported":        supported,
+		"textMaxBytes":     textMaxBytes,
+		"streamPreviewURL": "/api/files/" + rec.ID + "/preview",
+		"textPreviewURL":   "/api/files/" + rec.ID + "/preview-content",
+	})
+}
+
+func (h Handler) getFilePreviewContent(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	category, method, supported := detectPreviewMode(rec)
+	if !supported || method != "text_partial" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text preview is not available for this file type"})
+		return
+	}
+
+	limit := h.previewTextMaxBytes(r)
+	if limit <= 0 {
+		limit = 1 * 1024 * 1024
+	}
+	stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
+	}
+	defer stream.Close()
+
+	limited := io.LimitReader(stream, limit+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file preview content"})
+		return
+	}
+
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":      rec.ID,
+		"category":    category,
+		"content":     string(data),
+		"truncated":   truncated,
+		"limitBytes":  limit,
+		"sizeBytes":   rec.SizeBytes,
+		"encoding":    "utf-8",
+		"downloadURL": "/api/files/" + rec.ID + "/download",
+	})
+}
+
+func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	jobID := uuid.NewString()
+	_, err = h.DB.Exec(r.Context(), `
+		INSERT INTO preview_jobs (id, file_id, job_type, status, output_storage_key, error_message, attempts, created_at, updated_at)
+		VALUES ($1,$2,'metadata','queued',NULL,NULL,0,now(),now())
+	`, jobID, rec.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not enqueue preview job"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "preview.job.created", "preview_job", &jobID, clientIP(r), r.UserAgent(), map[string]any{"fileId": rec.ID})
+	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "status": "queued"})
+}
+
+func detectPreviewMode(rec fileRecord) (category string, method string, supported bool) {
+	mimeType := ""
+	if rec.MimeType != nil {
+		mimeType = strings.ToLower(strings.TrimSpace(*rec.MimeType))
+	}
+	ext := ""
+	if rec.Extension != nil {
+		ext = strings.ToLower(strings.TrimSpace(*rec.Extension))
+	}
+
+	switch {
+	case strings.HasPrefix(mimeType, "image/"):
+		return "image", "stream", true
+	case strings.HasPrefix(mimeType, "video/"):
+		return "video", "stream", true
+	case strings.HasPrefix(mimeType, "audio/"):
+		return "audio", "stream", true
+	case mimeType == "application/pdf":
+		return "pdf", "stream", true
+	case isTextLikeMime(mimeType) || isTextLikeExt(ext):
+		return "text", "text_partial", true
+	default:
+		return "binary", "unsupported", false
+	}
+}
+
+func isTextLikeMime(mimeType string) bool {
+	if strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	switch mimeType {
+	case "application/json", "application/xml", "application/javascript", "application/x-sh", "application/x-httpd-php":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTextLikeExt(ext string) bool {
+	switch ext {
+	case "txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "log", "ini", "env", "conf", "toml", "sql",
+		"js", "jsx", "ts", "tsx", "html", "css", "scss", "go", "py", "java", "c", "cpp", "h", "hpp", "cs",
+		"php", "rb", "rs", "swift", "kt", "sh", "bash", "zsh", "ps1", "dockerfile", "makefile":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h Handler) previewTextMaxBytes(r *http.Request) int64 {
+	var raw json.RawMessage
+	err := h.DB.QueryRow(r.Context(), `SELECT value FROM system_settings WHERE key='preview.text_max_bytes'`).Scan(&raw)
+	if err != nil {
+		return 1 * 1024 * 1024
+	}
+	var val int64
+	if err := json.Unmarshal(raw, &val); err != nil || val <= 0 {
+		return 1 * 1024 * 1024
+	}
+	return val
 }
 
 func (h Handler) previewFile(w http.ResponseWriter, r *http.Request) {

@@ -66,6 +66,8 @@ export default function DashboardPage() {
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [resumableUploading, setResumableUploading] = useState(false);
+  const [resumableProgress, setResumableProgress] = useState<Record<string, number>>({});
   const [shareURL, setShareURL] = useState<string | null>(null);
 
   useEffect(() => {
@@ -130,6 +132,30 @@ export default function DashboardPage() {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
     router.replace("/login");
+  }
+
+  async function changeMyPassword() {
+    const currentPassword = window.prompt("Current password:");
+    if (!currentPassword) return;
+    const newPassword = window.prompt("New password (at least 8 chars):");
+    if (!newPassword) return;
+
+    setItemsError(null);
+    try {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error ?? "Failed to change password");
+      alert("Password changed. Please login again.");
+      await logout();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to change password";
+      setItemsError(message);
+    }
   }
 
   function openFolder(item: BrowserItem) {
@@ -205,6 +231,80 @@ export default function DashboardPage() {
       setItemsError(message);
     } finally {
       setUploading(false);
+    }
+  }
+
+  async function uploadResumableFiles() {
+    const input = fileInputRef.current;
+    const files = input?.files;
+    if (!files || files.length === 0) return;
+
+    setResumableUploading(true);
+    setItemsError(null);
+    setShareURL(null);
+    setResumableProgress({});
+
+    const chunkSize = 5 * 1024 * 1024;
+
+    try {
+      for (const file of Array.from(files)) {
+        const initResp = await fetch("/api/uploads/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            folderId: currentParentId,
+            originalName: file.name,
+            targetName: file.name,
+            totalSizeBytes: file.size,
+          }),
+        });
+        const initData = await initResp.json().catch(() => ({}));
+        if (!initResp.ok) {
+          throw new Error(initData?.error ?? `Failed to initialize resumable upload for ${file.name}`);
+        }
+
+        const uploadId = initData.id as string;
+        let offset = 0;
+        while (offset < file.size) {
+          const end = Math.min(offset + chunkSize, file.size);
+          const chunk = file.slice(offset, end);
+          const chunkResp = await fetch(`/api/uploads/${uploadId}/chunk`, {
+            method: "PATCH",
+            headers: {
+              "Content-Type": "application/octet-stream",
+              "Upload-Offset": String(offset),
+            },
+            credentials: "include",
+            body: chunk,
+          });
+          const chunkData = await chunkResp.json().catch(() => ({}));
+          if (!chunkResp.ok) {
+            throw new Error(chunkData?.error ?? `Chunk upload failed for ${file.name}`);
+          }
+          offset = Number(chunkData?.uploadedBytes ?? end);
+          const percent = Math.min(100, Math.round((offset / file.size) * 100));
+          setResumableProgress((prev) => ({ ...prev, [file.name]: percent }));
+        }
+
+        const completeResp = await fetch(`/api/uploads/${uploadId}/complete`, {
+          method: "POST",
+          credentials: "include",
+        });
+        const completeData = await completeResp.json().catch(() => ({}));
+        if (!completeResp.ok) {
+          throw new Error(completeData?.error ?? `Failed to finalize upload for ${file.name}`);
+        }
+        setResumableProgress((prev) => ({ ...prev, [file.name]: 100 }));
+      }
+
+      await reloadItems();
+      if (input) input.value = "";
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Resumable upload failed";
+      setItemsError(message);
+    } finally {
+      setResumableUploading(false);
     }
   }
 
@@ -288,9 +388,14 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold">Dashboard</h1>
           <p className="text-sm text-slate-600">{me ? `Signed in as ${me.username} (${me.role})` : ""}</p>
         </div>
-        <button className="btn-ghost" onClick={logout} type="button">
-          Logout
-        </button>
+        <div className="flex gap-2">
+          <button className="btn-ghost" onClick={changeMyPassword} type="button">
+            Change Password
+          </button>
+          <button className="btn-ghost" onClick={logout} type="button">
+            Logout
+          </button>
+        </div>
       </header>
 
       <section className="panel p-5">
@@ -342,9 +447,21 @@ export default function DashboardPage() {
           <button className="btn-primary" disabled={uploading} onClick={uploadSelectedFiles} type="button">
             {uploading ? "Uploading..." : "Upload Files"}
           </button>
+          <button className="btn-ghost" disabled={resumableUploading} onClick={uploadResumableFiles} type="button">
+            {resumableUploading ? "Uploading Resumable..." : "Upload Resumable"}
+          </button>
         </div>
 
         {itemsError ? <p className="mt-3 text-sm text-red-600">{itemsError}</p> : null}
+        {Object.keys(resumableProgress).length > 0 ? (
+          <div className="mt-3 space-y-1 text-sm text-slate-700">
+            {Object.entries(resumableProgress).map(([name, progress]) => (
+              <p key={name}>
+                {name}: {progress}%
+              </p>
+            ))}
+          </div>
+        ) : null}
         {shareURL ? (
           <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
             Share URL: <a className="underline" href={shareURL} rel="noreferrer" target="_blank">{shareURL}</a>
