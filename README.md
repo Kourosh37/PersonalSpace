@@ -20,12 +20,13 @@ This phase also includes an initial working file workflow:
 - File metadata/read/rename/move/delete
 - File download + preview with HTTP Range support
 - Folder ZIP download (private + public share)
-- Share link creation/revoke/list
+- Share link CRUD/list/revoke
 - Public share pages (`/s/{token}`) with optional password checks
 - Admin APIs/pages for settings, storage summary, expired upload cleanup, and audit logs
 - Admin user management APIs/pages (list/create/update/deactivate/change-password)
 - Auth password change endpoint (`POST /api/auth/change-password`)
 - Redis-backed request rate limiting for login and public share access
+- Security headers middleware (`HSTS` behind HTTPS, `X-Frame-Options`, `nosniff`, `Permissions-Policy`)
 - Background maintenance loop for expired sessions and expired upload cleanup
 
 ## Quick start

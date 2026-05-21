@@ -17,6 +17,7 @@ import (
 	"space/backend/internal/storage"
 
 	"github.com/go-chi/chi/v5"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -30,6 +31,11 @@ type Handler struct {
 
 func (h Handler) Router() http.Handler {
 	r := chi.NewRouter()
+	r.Use(chimiddleware.RealIP)
+	r.Use(chimiddleware.RequestID)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(middleware.SecurityHeaders)
+
 	authMW := middleware.AuthMiddleware{DB: h.DB, SessionCookieName: h.Cfg.SessionCookieName}
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {

@@ -37,6 +37,9 @@ type shareRecord struct {
 func (h Handler) registerShareRoutes(api chi.Router, authMW middleware.AuthMiddleware) {
 	api.With(authMW.RequireAuth).Post("/shares", h.createShare)
 	api.With(authMW.RequireAuth).Get("/shares", h.listShares)
+	api.With(authMW.RequireAuth).Get("/shares/{id}", h.getShare)
+	api.With(authMW.RequireAuth).Patch("/shares/{id}", h.patchShare)
+	api.With(authMW.RequireAuth).Delete("/shares/{id}", h.deleteShare)
 	api.With(authMW.RequireAuth).Post("/shares/{id}/revoke", h.revokeShare)
 
 	api.Get("/public/shares/{token}", h.publicShareInfo)
@@ -203,6 +206,216 @@ func (h Handler) listShares(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h Handler) getShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	shareID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(shareID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid share id"})
+		return
+	}
+
+	share, err := h.fetchOwnedShare(r, user.ID, shareID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load share"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":                share.ID,
+		"targetType":        share.TargetType,
+		"targetId":          share.TargetID,
+		"expiresAt":         share.ExpiresAt,
+		"allowPreview":      share.AllowPreview,
+		"allowDownload":     share.AllowDownload,
+		"allowFolderBrowse": share.AllowFolderBrowse,
+		"maxDownloads":      share.MaxDownloads,
+		"downloadCount":     share.DownloadCount,
+		"isRevoked":         share.IsRevoked,
+		"createdAt":         share.CreatedAt,
+	})
+}
+
+type patchShareRequest struct {
+	Password          *string    `json:"password"`
+	ExpiresAt         *time.Time `json:"expiresAt"`
+	ClearPassword     *bool      `json:"clearPassword"`
+	ClearExpiration   *bool      `json:"clearExpiration"`
+	AllowPreview      *bool      `json:"allowPreview"`
+	AllowDownload     *bool      `json:"allowDownload"`
+	AllowFolderBrowse *bool      `json:"allowFolderBrowse"`
+	MaxDownloads      *int       `json:"maxDownloads"`
+	ClearMaxDownloads *bool      `json:"clearMaxDownloads"`
+	IsRevoked         *bool      `json:"isRevoked"`
+}
+
+func (h Handler) patchShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	shareID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(shareID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid share id"})
+		return
+	}
+
+	current, err := h.fetchOwnedShare(r, user.ID, shareID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "share not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load share"})
+		return
+	}
+
+	var req patchShareRequest
+	if err := ReadJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	passwordHash := current.PasswordHash
+	if req.ClearPassword != nil && *req.ClearPassword {
+		passwordHash = nil
+	}
+	if req.Password != nil {
+		plain := strings.TrimSpace(*req.Password)
+		if plain == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password cannot be empty"})
+			return
+		}
+		hash, err := auth.HashPassword(plain)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not hash password"})
+			return
+		}
+		passwordHash = &hash
+	}
+
+	expiresAt := current.ExpiresAt
+	if req.ClearExpiration != nil && *req.ClearExpiration {
+		expiresAt = nil
+	}
+	if req.ExpiresAt != nil {
+		if req.ExpiresAt.Before(time.Now().UTC()) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expiresAt must be in the future"})
+			return
+		}
+		t := req.ExpiresAt.UTC()
+		expiresAt = &t
+	}
+
+	maxDownloads := current.MaxDownloads
+	if req.ClearMaxDownloads != nil && *req.ClearMaxDownloads {
+		maxDownloads = nil
+	}
+	if req.MaxDownloads != nil {
+		if *req.MaxDownloads <= 0 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "maxDownloads must be greater than zero"})
+			return
+		}
+		val := *req.MaxDownloads
+		maxDownloads = &val
+	}
+
+	allowPreview := current.AllowPreview
+	if req.AllowPreview != nil {
+		allowPreview = *req.AllowPreview
+	}
+	allowDownload := current.AllowDownload
+	if req.AllowDownload != nil {
+		allowDownload = *req.AllowDownload
+	}
+	allowFolderBrowse := current.AllowFolderBrowse
+	if req.AllowFolderBrowse != nil {
+		allowFolderBrowse = *req.AllowFolderBrowse
+	}
+	isRevoked := current.IsRevoked
+	if req.IsRevoked != nil {
+		isRevoked = *req.IsRevoked
+	}
+
+	var passwordHashParam any = nil
+	if passwordHash != nil {
+		passwordHashParam = *passwordHash
+	}
+
+	_, err = h.DB.Exec(r.Context(), `
+		UPDATE share_links
+		SET password_hash=$1, expires_at=$2, allow_preview=$3, allow_download=$4, allow_folder_browse=$5, max_downloads=$6, is_revoked=$7, updated_at=now()
+		WHERE id=$8 AND owner_id=$9
+	`, passwordHashParam, expiresAt, allowPreview, allowDownload, allowFolderBrowse, maxDownloads, isRevoked, shareID, user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not update share"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "share.updated", "share", &shareID, clientIP(r), r.UserAgent(), map[string]any{
+		"allowPreview":      allowPreview,
+		"allowDownload":     allowDownload,
+		"allowFolderBrowse": allowFolderBrowse,
+		"isRevoked":         isRevoked,
+	})
+
+	updated, err := h.fetchOwnedShare(r, user.ID, shareID)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":                updated.ID,
+		"targetType":        updated.TargetType,
+		"targetId":          updated.TargetID,
+		"expiresAt":         updated.ExpiresAt,
+		"allowPreview":      updated.AllowPreview,
+		"allowDownload":     updated.AllowDownload,
+		"allowFolderBrowse": updated.AllowFolderBrowse,
+		"maxDownloads":      updated.MaxDownloads,
+		"downloadCount":     updated.DownloadCount,
+		"isRevoked":         updated.IsRevoked,
+		"createdAt":         updated.CreatedAt,
+	})
+}
+
+func (h Handler) deleteShare(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	shareID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(shareID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid share id"})
+		return
+	}
+
+	cmd, err := h.DB.Exec(r.Context(), `DELETE FROM share_links WHERE id=$1 AND owner_id=$2`, shareID, user.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not delete share"})
+		return
+	}
+	if cmd.RowsAffected() == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "share not found"})
+		return
+	}
+
+	h.insertAudit(r.Context(), &user.ID, "share.deleted", "share", &shareID, clientIP(r), r.UserAgent(), map[string]any{})
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (h Handler) revokeShare(w http.ResponseWriter, r *http.Request) {
@@ -684,4 +897,47 @@ func (h Handler) publicShareErr(w http.ResponseWriter, err error) {
 
 func (h Handler) bumpShareDownloadCount(r *http.Request, share shareRecord) {
 	_, _ = h.DB.Exec(r.Context(), `UPDATE share_links SET download_count = download_count + 1, updated_at=now() WHERE id=$1`, share.ID)
+}
+
+func (h Handler) fetchOwnedShare(r *http.Request, ownerID string, shareID string) (shareRecord, error) {
+	var rec shareRecord
+	var expiresAt sql.NullTime
+	var passwordHash sql.NullString
+	var maxDownloads sql.NullInt32
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT id, owner_id, target_type, target_id, token_hash, password_hash, expires_at, allow_preview, allow_download, allow_folder_browse, max_downloads, download_count, is_revoked, created_at
+		FROM share_links
+		WHERE id=$1 AND owner_id=$2
+	`, shareID, ownerID).Scan(
+		&rec.ID,
+		&rec.OwnerID,
+		&rec.TargetType,
+		&rec.TargetID,
+		&rec.TokenHash,
+		&passwordHash,
+		&expiresAt,
+		&rec.AllowPreview,
+		&rec.AllowDownload,
+		&rec.AllowFolderBrowse,
+		&maxDownloads,
+		&rec.DownloadCount,
+		&rec.IsRevoked,
+		&rec.CreatedAt,
+	)
+	if err != nil {
+		return shareRecord{}, err
+	}
+	if passwordHash.Valid {
+		value := passwordHash.String
+		rec.PasswordHash = &value
+	}
+	if expiresAt.Valid {
+		value := expiresAt.Time
+		rec.ExpiresAt = &value
+	}
+	if maxDownloads.Valid {
+		v := int(maxDownloads.Int32)
+		rec.MaxDownloads = &v
+	}
+	return rec, nil
 }

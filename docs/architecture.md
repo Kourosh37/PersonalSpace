@@ -24,6 +24,7 @@
 - Random session tokens (stored as SHA-256 hash in DB).
 - HttpOnly cookie sessions.
 - Admin role checks on `/api/admin/*`.
+- HTTP security headers (`HSTS`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`, `COOP`).
 - Audit log entries for login and setting updates.
 
 ## Implemented settings
@@ -38,7 +39,7 @@
 - Files: upload, metadata, rename, delete, move, download, preview (Range)
 - Upload sessions: init, chunk append, status, complete, cancel (custom resumable flow)
 - Tus: create/head/patch/delete resumable uploads (`/api/uploads/tus/*`)
-- Shares: create/list/revoke + public share info/items/file download/file preview
+- Shares: create/get/list/update/delete/revoke + public share info/items/file download/file preview
 - ZIP: private folder ZIP + public shared folder ZIP
 - Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
   plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
