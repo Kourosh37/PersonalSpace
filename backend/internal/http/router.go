@@ -39,6 +39,8 @@ func (h Handler) Router() http.Handler {
 			ar.With(authMW.RequireAuth).Get("/me", h.me)
 		})
 
+		h.registerFolderRoutes(api, authMW)
+
 		api.With(authMW.RequireAuth, authMW.RequireAdmin).Route("/admin", func(admin chi.Router) {
 			admin.Get("/system/health", func(w http.ResponseWriter, r *http.Request) {
 				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
