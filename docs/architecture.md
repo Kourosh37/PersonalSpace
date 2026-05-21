@@ -33,24 +33,20 @@
 
 ## Implemented APIs (current)
 
-- Auth: `login`, `logout`, `me`
+- Auth: `login`, `logout`, `me`, `change-password`
 - Folders: list items, create, rename, delete, move
 - Files: upload, metadata, rename, delete, move, download, preview (Range)
 - Upload sessions: init, chunk append, status, complete, cancel (custom resumable flow)
+- Tus: create/head/patch/delete resumable uploads (`/api/uploads/tus/*`)
 - Shares: create/list/revoke + public share info/items/file download/file preview
 - ZIP: private folder ZIP + public shared folder ZIP
 - Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
   plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
   plus user management (`/api/admin/users*`)
-- Auth: own password change endpoint (`POST /api/auth/change-password`)
 - Security: Redis-backed rate limiting for login and public share access
 - Maintenance: periodic cleanup of expired sessions and expired upload sessions
 
 ## Next phases
 
-- Resumable upload (tus/custom chunked)
-- File/folder CRUD and storage writes
-- Streaming download with Range
 - Preview pipeline + worker
-- Share links and public routes
-- Full admin panels and audit filtering
+- Remaining admin settings coverage and richer audit filtering UI

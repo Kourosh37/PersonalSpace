@@ -47,6 +47,7 @@ func (h Handler) Router() http.Handler {
 		h.registerFolderRoutes(api, authMW)
 		h.registerFileRoutes(api, authMW)
 		h.registerUploadRoutes(api, authMW)
+		h.registerTusRoutes(api, authMW)
 		h.registerShareRoutes(api, authMW)
 
 		api.With(authMW.RequireAuth, authMW.RequireAdmin).Route("/admin", func(admin chi.Router) {

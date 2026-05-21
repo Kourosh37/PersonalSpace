@@ -16,6 +16,7 @@ This phase also includes an initial working file workflow:
 - Folder CRUD + move
 - File upload (streaming multipart) with server-side max size enforcement
 - Custom resumable upload sessions (`/api/uploads/init|chunk|status|complete|cancel`)
+- Tus resumable upload endpoints (`/api/uploads/tus/*`) with HEAD/PATCH/DELETE support
 - File metadata/read/rename/move/delete
 - File download + preview with HTTP Range support
 - Folder ZIP download (private + public share)
@@ -81,4 +82,5 @@ See:
 ## Notes
 
 - This phase initializes production-minded structure and core modules.
-- Tus resumable upload, ZIP folder download, office/media preview workers, and advanced admin settings are next.
+- Dashboard includes Uppy Tus-based resumable upload panel.
+- Office/media preview workers and additional advanced admin settings remain next.
