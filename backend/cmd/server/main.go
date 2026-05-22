@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	migrationsDir, err := resolveMigrationsDir()
+	if err != nil {
+		slog.Error("resolve migrations dir", "error", err)
+		os.Exit(1)
+	}
+	if err := db.EnsureMigrationsApplied(ctx, pool, migrationsDir); err != nil {
+		slog.Error("database schema is not up to date", "error", err, "migrationsDir", migrationsDir)
+		os.Exit(1)
+	}
 
 	localStorage, err := storage.NewLocalStorage(cfg.StorageRoot)
 	if err != nil {
@@ -81,4 +94,38 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
 	}
+}
+
+func resolveMigrationsDir() (string, error) {
+	candidates := []string{
+		strings.TrimSpace(os.Getenv("BACKEND_MIGRATIONS_DIR")),
+		"/app/migrations",
+		"migrations",
+		"./migrations",
+		"../migrations",
+		"backend/migrations",
+	}
+
+	for _, raw := range candidates {
+		if raw == "" {
+			continue
+		}
+		info, err := os.Stat(raw)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		sqlFiles, err := filepath.Glob(filepath.Join(raw, "*.sql"))
+		if err != nil {
+			continue
+		}
+		if len(sqlFiles) > 0 {
+			abs, err := filepath.Abs(raw)
+			if err != nil {
+				return raw, nil
+			}
+			return abs, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not locate migrations directory (set BACKEND_MIGRATIONS_DIR)")
 }

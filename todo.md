@@ -1,22 +1,8 @@
 # TODO - Space Production Completion
 
-This file tracks all remaining work needed to make the project fully production-ready based on `prompt.txt` and the current codebase state.
+This file tracks all remaining work needed to make the project fully production-ready based on the current codebase state.
 
-## 1) Critical blockers before production
-
-- [ ] Implement real `GET /api/admin/system/health`.
-Details: It currently returns static `{"status":"ok"}`. Add real checks for PostgreSQL, Redis, storage root (`/data/storage`), and worker health. Return structured status like `ok`, `degraded`, `down`.
-
-- [ ] Add public equivalents for preview metadata/content endpoints.
-Details: Add:
-`GET /api/public/shares/:token/files/:fileId/preview-info`
-`GET /api/public/shares/:token/files/:fileId/preview-content`
-with full share token/password/permissions enforcement, matching private preview behavior.
-
-- [ ] Add migration gating at runtime startup.
-Details: Prevent partial startup when schema is outdated. Either enforce migrations before app start or fail fast with a clear operational error.
-
-## 2) Security hardening
+## 1) Security hardening
 
 - [ ] Enforce production cookie/session policy.
 Details: Strong defaults for `Secure`, proper `SameSite`, and explicit reverse-proxy + HTTPS termination behavior.
@@ -30,7 +16,7 @@ Details: Define strict handling for SVG/HTML/XML (safe text rendering or strict 
 - [ ] Create and document a threat model.
 Details: Cover brute force, token guessing, path traversal, malicious file payloads, content sniffing, and privilege bypass scenarios.
 
-## 3) Product feature gaps
+## 2) Product feature gaps
 
 - [ ] Add optional in-app download progress mode.
 Details: `fetch/streams` mode with progress/speed/ETA where feasible, while keeping native browser download for large files.
@@ -62,7 +48,7 @@ Details: Validate fallback behavior for unsupported codecs/containers, binary-te
 - [ ] Validate share-link policy completeness.
 Details: Verify download-limit, expiration, revoke behavior, and optional password policy all match admin global settings in every public endpoint.
 
-## 4) Reliability, testing, and CI/CD
+## 3) Reliability, testing, and CI/CD
 
 - [ ] Add backend automated tests.
 Details: Unit/integration coverage for auth/session, uploads, share permissions, range streaming, preview pipeline, and settings validation.
@@ -76,7 +62,7 @@ Details: Run `go test`, frontend build/type checks, migration checks, and Docker
 - [ ] Validate backup/restore with disaster-recovery drills.
 Details: Execute full restore in a clean environment and verify DB + storage integrity.
 
-## 5) Operations and observability
+## 4) Operations and observability
 
 - [ ] Standardize structured logging.
 Details: Consistent app/worker logs with request ID, user ID, action, and severity.
@@ -87,7 +73,7 @@ Details: Expose metrics for upload throughput, preview queue depth, failed jobs,
 - [ ] Define minimum alerting policy.
 Details: Alerts for repeated auth failures, DB/Redis connectivity issues, elevated 5xx rates, and preview worker failures.
 
-## 6) Production documentation
+## 5) Production documentation
 
 - [ ] Add an operations runbook.
 Details: Deploy, update, rollback, backup, restore, secret rotation, and incident response steps.
@@ -104,7 +90,7 @@ Details: Document request/response/error models for auth, uploads (tus + custom)
 - [ ] Add security operations documentation.
 Details: Secret management, session invalidation strategy, log-retention policy, and hardening checklist for production rollout.
 
-## 7) Cleanup already completed
+## 6) Cleanup already completed
 
 - [x] Removed legacy deployment artifacts not used in current architecture:
 `backend/Dockerfile`

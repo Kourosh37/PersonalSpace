@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -45,6 +46,8 @@ func (h Handler) registerShareRoutes(api chi.Router, authMW middleware.AuthMiddl
 	api.Get("/public/shares/{token}", h.publicShareInfo)
 	api.Post("/public/shares/{token}/password", h.publicSharePasswordCheck)
 	api.Get("/public/shares/{token}/items", h.publicShareItems)
+	api.Get("/public/shares/{token}/files/{fileId}/preview-info", h.publicShareFilePreviewInfo)
+	api.Get("/public/shares/{token}/files/{fileId}/preview-content", h.publicShareFilePreviewContent)
 	api.Get("/public/shares/{token}/files/{fileId}/download", h.publicShareFileDownload)
 	api.Get("/public/shares/{token}/files/{fileId}/preview", h.publicShareFilePreview)
 	api.Get("/public/shares/{token}/folders/{folderId}/download-zip", h.publicShareFolderZip)
@@ -616,6 +619,319 @@ func (h Handler) publicShareFileDownload(w http.ResponseWriter, r *http.Request)
 
 func (h Handler) publicShareFilePreview(w http.ResponseWriter, r *http.Request) {
 	h.publicShareFileStream(w, r, true)
+}
+
+func (h Handler) publicShareFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
+	password := getPublicSharePassword(r)
+	share, err := h.resolvePublicShare(r, password, true)
+	if err != nil {
+		h.publicShareErr(w, err)
+		return
+	}
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load sharing settings"})
+		return
+	}
+	if !sharingCfg.PublicPreviewEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "public preview is disabled by admin settings"})
+		return
+	}
+	if !share.AllowPreview {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview is disabled for this share"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "fileId")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchFileForShare(r, share, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found in this share"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	category, method, supported := detectPreviewMode(rec)
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	previews, previewsErr := h.listFilePreviews(r.Context(), rec.ID)
+	if previewsErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file previews"})
+		return
+	}
+	previewItems := make([]map[string]any, 0, len(previews))
+	var hasReadyThumbnail bool
+	var hasReadyPDF bool
+	for _, p := range previews {
+		if p.Status == "ready" && p.Type == "thumbnail" {
+			hasReadyThumbnail = true
+		}
+		if p.Status == "ready" && p.Type == "pdf" {
+			hasReadyPDF = true
+		}
+		previewItems = append(previewItems, map[string]any{
+			"id":         p.ID,
+			"type":       p.Type,
+			"storageKey": p.StorageKey,
+			"mimeType":   p.MimeType,
+			"sizeBytes":  p.SizeBytes,
+			"status":     p.Status,
+			"createdAt":  p.CreatedAt,
+			"updatedAt":  p.UpdatedAt,
+		})
+	}
+
+	token := chi.URLParam(r, "token")
+	streamPreviewURL := "/api/public/shares/" + token + "/files/" + rec.ID + "/preview"
+	textPreviewURL := "/api/public/shares/" + token + "/files/" + rec.ID + "/preview-content"
+	thumbnailURL := streamPreviewURL + "?variant=thumbnail"
+	pdfPreviewURL := streamPreviewURL + "?variant=pdf"
+
+	if allowed, reason := previewAllowedByConfig(previewCfg, category, true); !allowed {
+		supported = false
+		method = "disabled"
+		if reason == "" {
+			reason = "public preview is disabled by admin settings"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"fileId":              rec.ID,
+			"name":                rec.Name,
+			"mimeType":            rec.MimeType,
+			"sizeBytes":           rec.SizeBytes,
+			"category":            category,
+			"method":              method,
+			"supported":           supported,
+			"textMaxBytes":        h.previewTextMaxBytes(r),
+			"streamPreviewURL":    streamPreviewURL,
+			"textPreviewURL":      textPreviewURL,
+			"thumbnailURL":        thumbnailURL,
+			"pdfPreviewURL":       pdfPreviewURL,
+			"generatedPreviews":   previewItems,
+			"thumbnailReady":      hasReadyThumbnail,
+			"pdfReady":            hasReadyPDF,
+			"needsGeneration":     previewNeedsGeneration(category, hasReadyThumbnail, hasReadyPDF),
+			"recommendedJobTypes": recommendedPreviewJobTypes(category),
+			"reason":              reason,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":              rec.ID,
+		"name":                rec.Name,
+		"mimeType":            rec.MimeType,
+		"sizeBytes":           rec.SizeBytes,
+		"category":            category,
+		"method":              method,
+		"supported":           supported,
+		"textMaxBytes":        h.previewTextMaxBytes(r),
+		"streamPreviewURL":    streamPreviewURL,
+		"textPreviewURL":      textPreviewURL,
+		"thumbnailURL":        thumbnailURL,
+		"pdfPreviewURL":       pdfPreviewURL,
+		"generatedPreviews":   previewItems,
+		"thumbnailReady":      hasReadyThumbnail,
+		"pdfReady":            hasReadyPDF,
+		"needsGeneration":     previewNeedsGeneration(category, hasReadyThumbnail, hasReadyPDF),
+		"recommendedJobTypes": recommendedPreviewJobTypes(category),
+	})
+}
+
+func (h Handler) publicShareFilePreviewContent(w http.ResponseWriter, r *http.Request) {
+	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+
+	password := getPublicSharePassword(r)
+	share, err := h.resolvePublicShare(r, password, true)
+	if err != nil {
+		h.publicShareErr(w, err)
+		return
+	}
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load sharing settings"})
+		return
+	}
+	if !sharingCfg.PublicPreviewEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "public preview is disabled by admin settings"})
+		return
+	}
+	if !share.AllowPreview {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview is disabled for this share"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "fileId")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchFileForShare(r, share, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found in this share"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	category, method, supported := detectPreviewMode(rec)
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	if allowed, reason := previewAllowedByConfig(previewCfg, category, true); !allowed {
+		if reason == "" {
+			reason = "public preview is disabled by admin settings"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
+		return
+	}
+	if !supported || method != "text_partial" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text preview is not available for this file type"})
+		return
+	}
+
+	limit := h.previewTextMaxBytes(r)
+	if limit <= 0 {
+		limit = 1 * 1024 * 1024
+	}
+	token := chi.URLParam(r, "token")
+	downloadURL := "/api/public/shares/" + token + "/files/" + rec.ID + "/download"
+	if isCSVPreviewCandidate(rec) {
+		h.publicShareCSVPreviewContent(w, r, rec, limit, downloadURL)
+		return
+	}
+
+	stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
+	}
+	defer stream.Close()
+
+	limited := io.LimitReader(stream, limit+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file preview content"})
+		return
+	}
+
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":      rec.ID,
+		"category":    category,
+		"content":     string(data),
+		"truncated":   truncated,
+		"limitBytes":  limit,
+		"sizeBytes":   rec.SizeBytes,
+		"encoding":    "utf-8",
+		"downloadURL": downloadURL,
+	})
+}
+
+func (h Handler) publicShareCSVPreviewContent(w http.ResponseWriter, r *http.Request, rec fileRecord, limit int64, downloadURL string) {
+	if limit < 2*1024*1024 {
+		limit = 2 * 1024 * 1024
+	}
+	maxRows := h.previewCSVMaxRows(r)
+	if maxRows <= 0 {
+		maxRows = 500
+	}
+
+	stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
+	}
+	defer stream.Close()
+
+	data, err := io.ReadAll(io.LimitReader(stream, limit+1))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read csv preview content"})
+		return
+	}
+
+	truncatedByBytes := int64(len(data)) > limit
+	if truncatedByBytes {
+		data = data[:limit]
+	}
+	delimiter := detectCSVDelimiter(data)
+
+	reader := csv.NewReader(strings.NewReader(string(data)))
+	reader.Comma = delimiter
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	rows := make([][]string, 0, maxRows)
+	truncatedByRows := false
+	for len(rows) < maxRows {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			break
+		}
+		rows = append(rows, record)
+	}
+	if len(rows) >= maxRows {
+		if _, err := reader.Read(); err == nil {
+			truncatedByRows = true
+		}
+	}
+
+	headers := []string{}
+	previewRows := rows
+	if len(rows) > 0 {
+		headers = rows[0]
+		if len(rows) > 1 {
+			previewRows = rows[1:]
+		} else {
+			previewRows = [][]string{}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":         rec.ID,
+		"category":       "csv",
+		"delimiter":      string(delimiter),
+		"headers":        headers,
+		"rows":           previewRows,
+		"rawRows":        rows,
+		"rowCount":       len(rows),
+		"maxRows":        maxRows,
+		"truncated":      truncatedByBytes || truncatedByRows,
+		"sizeBytes":      rec.SizeBytes,
+		"downloadURL":    downloadURL,
+		"encoding":       "utf-8",
+		"limitBytes":     limit,
+		"truncatedBytes": truncatedByBytes,
+		"truncatedRows":  truncatedByRows,
+	})
 }
 
 func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, inline bool) {

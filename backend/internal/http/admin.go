@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -51,6 +53,7 @@ func (h Handler) registerAdminRoutes(admin chi.Router) {
 	admin.Post("/storage/cleanup-expired-uploads", h.adminCleanupExpiredUploads)
 	admin.Post("/storage/cleanup-preview-cache", h.adminCleanupPreviewCache)
 	admin.Get("/audit-logs", h.adminAuditLogs)
+	admin.Get("/system/health", h.adminSystemHealth)
 	admin.Get("/system/info", h.adminSystemInfo)
 	h.registerAdminUserRoutes(admin)
 }
@@ -380,5 +383,132 @@ func (h Handler) adminSystemInfo(w http.ResponseWriter, r *http.Request) {
 		"httpAddr":      h.Cfg.HTTPAddr,
 		"storageRoot":   h.Cfg.StorageRoot,
 		"timeUTC":       time.Now().UTC(),
+	})
+}
+
+func (h Handler) adminSystemHealth(w http.ResponseWriter, r *http.Request) {
+	type component struct {
+		Status  string         `json:"status"`
+		Details map[string]any `json:"details,omitempty"`
+		Error   string         `json:"error,omitempty"`
+	}
+
+	overallStatus := "ok"
+	components := map[string]component{}
+
+	setOverall := func(next string) {
+		if next == "down" {
+			overallStatus = "down"
+			return
+		}
+		if next == "degraded" && overallStatus == "ok" {
+			overallStatus = "degraded"
+		}
+	}
+
+	dbCtx, dbCancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer dbCancel()
+	if err := h.DB.Ping(dbCtx); err != nil {
+		components["postgres"] = component{Status: "down", Error: err.Error()}
+		setOverall("down")
+	} else {
+		var one int
+		if err := h.DB.QueryRow(dbCtx, `SELECT 1`).Scan(&one); err != nil {
+			components["postgres"] = component{Status: "down", Error: err.Error()}
+			setOverall("down")
+		} else {
+			components["postgres"] = component{Status: "ok", Details: map[string]any{"ping": true}}
+		}
+	}
+
+	if h.RateLimiter == nil {
+		components["redis"] = component{Status: "degraded", Error: "rate limiter is not active"}
+		setOverall("degraded")
+	} else {
+		type redisPinger interface {
+			Ping(context.Context) error
+		}
+		redisCtx, redisCancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer redisCancel()
+		if pinger, ok := h.RateLimiter.(redisPinger); ok {
+			if err := pinger.Ping(redisCtx); err != nil {
+				components["redis"] = component{Status: "degraded", Error: err.Error()}
+				setOverall("degraded")
+			} else {
+				components["redis"] = component{Status: "ok", Details: map[string]any{"ping": true}}
+			}
+		} else {
+			components["redis"] = component{Status: "degraded", Error: "rate limiter does not expose ping health check"}
+			setOverall("degraded")
+		}
+	}
+
+	storageKey := fmt.Sprintf("health/check-%d.tmp", time.Now().UTC().UnixNano())
+	storageCtx, storageCancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer storageCancel()
+	if err := h.Storage.PutStream(storageCtx, storageKey, bytes.NewReader([]byte("ok"))); err != nil {
+		components["storage"] = component{Status: "down", Error: err.Error()}
+		setOverall("down")
+	} else {
+		stat, err := h.Storage.Stat(storageCtx, storageKey)
+		if err != nil {
+			components["storage"] = component{Status: "down", Error: err.Error()}
+			setOverall("down")
+		} else {
+			components["storage"] = component{
+				Status: "ok",
+				Details: map[string]any{
+					"root":         h.Cfg.StorageRoot,
+					"probeKey":     storageKey,
+					"probeSize":    stat.Size,
+					"probePresent": true,
+				},
+			}
+		}
+		_ = h.Storage.Delete(storageCtx, storageKey)
+	}
+
+	var queuedOld int64
+	var processingStale int64
+	var queueErr error
+	queueErr = h.DB.QueryRow(r.Context(), `
+		SELECT COUNT(*)
+		FROM preview_jobs
+		WHERE status='queued' AND created_at < (now() - interval '10 minutes')
+	`).Scan(&queuedOld)
+	if queueErr == nil {
+		queueErr = h.DB.QueryRow(r.Context(), `
+			SELECT COUNT(*)
+			FROM preview_jobs
+			WHERE status='processing' AND updated_at < (now() - interval '20 minutes')
+		`).Scan(&processingStale)
+	}
+	if queueErr != nil {
+		components["preview_worker"] = component{Status: "degraded", Error: queueErr.Error()}
+		setOverall("degraded")
+	} else {
+		workerStatus := "ok"
+		if queuedOld > 0 || processingStale > 0 {
+			workerStatus = "degraded"
+			setOverall("degraded")
+		}
+		components["preview_worker"] = component{
+			Status: workerStatus,
+			Details: map[string]any{
+				"staleQueuedJobs":     queuedOld,
+				"staleProcessingJobs": processingStale,
+			},
+		}
+	}
+
+	httpStatus := http.StatusOK
+	if overallStatus == "down" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	writeJSON(w, httpStatus, map[string]any{
+		"status":     overallStatus,
+		"components": components,
+		"timeUTC":    time.Now().UTC(),
 	})
 }
