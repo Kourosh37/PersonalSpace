@@ -34,6 +34,7 @@ This phase also includes an initial working file workflow:
 - Async thumbnail preview generation for image files (`jobType=thumbnail`)
 - Preview stream variants via `GET /api/files/:id/preview?variant=thumbnail|pdf|metadata` (when generated)
 - Office-to-PDF conversion via preview worker (`jobType=office_to_pdf`) using bundled LibreOffice
+- Media metadata enrichment for audio/video preview metadata via bundled `ffprobe`
 
 ## Quick start
 

@@ -458,6 +458,7 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 			"generatedPreviews":   previewItems,
 			"thumbnailReady":      hasReadyThumbnail,
 			"pdfReady":            hasReadyPDF,
+			"needsGeneration":     previewNeedsGeneration(category, hasReadyThumbnail, hasReadyPDF),
 			"recommendedJobTypes": recommendedPreviewJobTypes(category),
 			"reason":              reason,
 		})
@@ -481,6 +482,7 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 		"generatedPreviews":   previewItems,
 		"thumbnailReady":      hasReadyThumbnail,
 		"pdfReady":            hasReadyPDF,
+		"needsGeneration":     previewNeedsGeneration(category, hasReadyThumbnail, hasReadyPDF),
 		"recommendedJobTypes": recommendedPreviewJobTypes(category),
 	})
 }
@@ -612,6 +614,10 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 	category, _, _ := detectPreviewMode(rec)
 	if jobType == "thumbnail" && category != "image" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thumbnail preview is only supported for image files"})
+		return
+	}
+	if jobType == "thumbnail" && !previewCfg.ImageThumbnails {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "image thumbnails are disabled by admin settings"})
 		return
 	}
 	if jobType == "office_to_pdf" && category != "office" {
@@ -855,6 +861,17 @@ func recommendedPreviewJobTypes(category string) []string {
 		return []string{"office_to_pdf", "metadata"}
 	default:
 		return []string{"metadata"}
+	}
+}
+
+func previewNeedsGeneration(category string, thumbnailReady bool, pdfReady bool) bool {
+	switch category {
+	case "image":
+		return !thumbnailReady
+	case "office":
+		return !pdfReady
+	default:
+		return false
 	}
 }
 

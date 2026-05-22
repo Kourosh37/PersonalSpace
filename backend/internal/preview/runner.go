@@ -179,6 +179,9 @@ func (r Runner) generateMetadataPreview(ctx context.Context, job previewJob) err
 		"updatedAt":      file.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		"generatedAt":    time.Now().UTC().Format(time.RFC3339Nano),
 	}
+	if mediaMeta, metaErr := r.extractMediaMetadata(ctx, file); metaErr == nil && mediaMeta != nil {
+		payload["media"] = mediaMeta
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -199,6 +202,67 @@ func (r Runner) generateMetadataPreview(ctx context.Context, job previewJob) err
 		WHERE id=$2
 	`, outputKey, job.ID)
 	return err
+}
+
+func (r Runner) extractMediaMetadata(ctx context.Context, file fileForMetadata) (map[string]any, error) {
+	mimeType := ""
+	if file.MimeType != nil {
+		mimeType = strings.ToLower(strings.TrimSpace(*file.MimeType))
+	}
+	if !strings.HasPrefix(mimeType, "video/") && !strings.HasPrefix(mimeType, "audio/") {
+		return nil, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "space-media-meta-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ext := "bin"
+	if file.Extension != nil && strings.TrimSpace(*file.Extension) != "" {
+		ext = strings.TrimPrefix(strings.TrimSpace(*file.Extension), ".")
+	}
+	sourcePath := filepath.Join(tmpDir, "source."+ext)
+	sourceFile, err := os.Create(sourcePath)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := r.Storage.GetStream(ctx, file.StorageKey)
+	if err != nil {
+		sourceFile.Close()
+		return nil, err
+	}
+	if _, err := io.Copy(sourceFile, stream); err != nil {
+		stream.Close()
+		sourceFile.Close()
+		return nil, err
+	}
+	stream.Close()
+	if err := sourceFile.Close(); err != nil {
+		return nil, err
+	}
+
+	cmd := exec.CommandContext(
+		ctx,
+		"ffprobe",
+		"-v", "error",
+		"-print_format", "json",
+		"-show_format",
+		"-show_streams",
+		sourcePath,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, err
+	}
+	return parsed, nil
 }
 
 func (r Runner) generateThumbnailPreview(ctx context.Context, job previewJob) error {
