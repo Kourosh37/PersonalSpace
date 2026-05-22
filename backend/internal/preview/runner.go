@@ -6,6 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"log/slog"
 	"strings"
 	"time"
@@ -99,6 +105,12 @@ func (r Runner) processOne(ctx context.Context, maxAttempts int) (bool, error) {
 		if err := r.generateMetadataPreview(ctx, job); err != nil {
 			return true, r.markJobFailure(ctx, job, maxAttempts, err)
 		}
+	case "thumbnail":
+		if err := r.generateThumbnailPreview(ctx, job); err != nil {
+			return true, r.markJobFailure(ctx, job, maxAttempts, err)
+		}
+	case "office_to_pdf":
+		return true, r.markJobFailure(ctx, job, maxAttempts, fmt.Errorf("office preview conversion is not available in this worker image"))
 	default:
 		return true, r.markJobFailure(ctx, job, maxAttempts, fmt.Errorf("unsupported preview job type: %s", job.JobType))
 	}
@@ -171,18 +183,7 @@ func (r Runner) generateMetadataPreview(ctx context.Context, job previewJob) err
 		return err
 	}
 
-	_, err = r.DB.Exec(ctx, `
-		INSERT INTO file_previews (id, file_id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at)
-		VALUES ($1,$2,'metadata',$3,'application/json',$4,'ready',now(),now())
-		ON CONFLICT (file_id, preview_type)
-		DO UPDATE SET
-			storage_key=EXCLUDED.storage_key,
-			mime_type=EXCLUDED.mime_type,
-			size_bytes=EXCLUDED.size_bytes,
-			status='ready',
-			updated_at=now()
-	`, uuid.NewString(), file.ID, outputKey, int64(len(body)))
-	if err != nil {
+	if err := r.upsertFilePreview(ctx, file.ID, "metadata", outputKey, "application/json", int64(len(body))); err != nil {
 		return err
 	}
 
@@ -192,6 +193,98 @@ func (r Runner) generateMetadataPreview(ctx context.Context, job previewJob) err
 		WHERE id=$2
 	`, outputKey, job.ID)
 	return err
+}
+
+func (r Runner) generateThumbnailPreview(ctx context.Context, job previewJob) error {
+	file, err := r.fetchFileForMetadata(ctx, job.FileID)
+	if err != nil {
+		return err
+	}
+
+	stream, err := r.Storage.GetStream(ctx, file.StorageKey)
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
+	src, _, err := image.Decode(stream)
+	if err != nil {
+		return fmt.Errorf("decode image: %w", err)
+	}
+	thumb := resizeImageContain(src, 320, 320)
+
+	var out bytes.Buffer
+	if err := jpeg.Encode(&out, thumb, &jpeg.Options{Quality: 82}); err != nil {
+		return err
+	}
+
+	outputKey := fmt.Sprintf("previews/thumbnails/%s.jpg", file.ID)
+	if err := r.Storage.PutStream(ctx, outputKey, bytes.NewReader(out.Bytes())); err != nil {
+		return err
+	}
+	if err := r.upsertFilePreview(ctx, file.ID, "thumbnail", outputKey, "image/jpeg", int64(out.Len())); err != nil {
+		return err
+	}
+
+	_, err = r.DB.Exec(ctx, `
+		UPDATE preview_jobs
+		SET status='completed', output_storage_key=$1, error_message=NULL, updated_at=now()
+		WHERE id=$2
+	`, outputKey, job.ID)
+	return err
+}
+
+func (r Runner) upsertFilePreview(ctx context.Context, fileID string, previewType string, storageKey string, mimeType string, sizeBytes int64) error {
+	_, err := r.DB.Exec(ctx, `
+		INSERT INTO file_previews (id, file_id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,'ready',now(),now())
+		ON CONFLICT (file_id, preview_type)
+		DO UPDATE SET
+			storage_key=EXCLUDED.storage_key,
+			mime_type=EXCLUDED.mime_type,
+			size_bytes=EXCLUDED.size_bytes,
+			status='ready',
+			updated_at=now()
+	`, uuid.NewString(), fileID, previewType, storageKey, mimeType, sizeBytes)
+	return err
+}
+
+func resizeImageContain(src image.Image, maxW int, maxH int) image.Image {
+	b := src.Bounds()
+	srcW := b.Dx()
+	srcH := b.Dy()
+	if srcW <= 0 || srcH <= 0 {
+		return src
+	}
+	if srcW <= maxW && srcH <= maxH {
+		return src
+	}
+
+	scaleW := float64(maxW) / float64(srcW)
+	scaleH := float64(maxH) / float64(srcH)
+	scale := scaleW
+	if scaleH < scale {
+		scale = scaleH
+	}
+	dstW := int(float64(srcW) * scale)
+	dstH := int(float64(srcH) * scale)
+	if dstW < 1 {
+		dstW = 1
+	}
+	if dstH < 1 {
+		dstH = 1
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	draw.Draw(dst, dst.Bounds(), &image.Uniform{C: color.White}, image.Point{}, draw.Src)
+	for y := 0; y < dstH; y++ {
+		srcY := b.Min.Y + (y*srcH)/dstH
+		for x := 0; x < dstW; x++ {
+			srcX := b.Min.X + (x*srcW)/dstW
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+	return dst
 }
 
 func (r Runner) fetchFileForMetadata(ctx context.Context, fileID string) (fileForMetadata, error) {

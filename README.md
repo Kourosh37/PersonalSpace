@@ -31,6 +31,8 @@ This phase also includes an initial working file workflow:
 - CSRF protection for state-changing API requests using Origin/Referer validation
 - Background maintenance loop for expired sessions and expired upload cleanup
 - Async preview worker queue for metadata previews (`preview_jobs` -> `file_previews`)
+- Async thumbnail preview generation for image files (`jobType=thumbnail`)
+- Preview stream variants via `GET /api/files/:id/preview?variant=thumbnail|pdf|metadata` (when generated)
 
 ## Quick start
 
@@ -93,6 +95,6 @@ See:
 
 - This phase initializes production-minded structure and core modules.
 - Dashboard includes Uppy Tus-based resumable upload panel.
-- Office-to-PDF/media thumbnail preview generation is still a next phase.
+- Office-to-PDF conversion remains a next phase (job type is recognized, but conversion tooling is not bundled yet).
 - `backup.sh` now creates a full backup directory containing PostgreSQL dump plus storage volume archive.
 - `restore.sh <backup_dir> --force` restores both DB and storage data.

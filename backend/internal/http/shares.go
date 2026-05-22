@@ -472,6 +472,10 @@ func (h Handler) publicShareInfo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "shared target not found"})
 		return
 	}
+	h.insertAudit(r.Context(), nil, "share.public.info_accessed", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+		"targetType": share.TargetType,
+		"targetId":   share.TargetID,
+	})
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":                share.ID,
@@ -506,6 +510,7 @@ func (h Handler) publicSharePasswordCheck(w http.ResponseWriter, r *http.Request
 		h.publicShareErr(w, err)
 		return
 	}
+	h.insertAudit(r.Context(), nil, "share.public.password.ok", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{})
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "shareId": share.ID})
 }
@@ -529,6 +534,9 @@ func (h Handler) publicShareItems(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "folder browsing is disabled for this share"})
 		return
 	}
+	h.insertAudit(r.Context(), nil, "share.public.items_accessed", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+		"parentId": r.URL.Query().Get("parentId"),
+	})
 
 	parentID, err := optionalUUIDFromQuery(r, "parentId")
 	if err != nil {
@@ -661,6 +669,9 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
+	storageKey := rec.StorageKey
+	lastModified := rec.UpdatedAt
+
 	if inline {
 		previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
 		if cfgErr != nil {
@@ -675,6 +686,32 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
 			return
 		}
+
+		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant != "" {
+			if variant != "thumbnail" && variant != "pdf" && variant != "metadata" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview variant"})
+				return
+			}
+			previewRec, err := h.getReadyFilePreview(r.Context(), rec.ID, variant)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "requested preview variant is not ready"})
+					return
+				}
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview variant"})
+				return
+			}
+			if previewRec.StorageKey == nil || strings.TrimSpace(*previewRec.StorageKey) == "" {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "requested preview variant is not ready"})
+				return
+			}
+			storageKey = *previewRec.StorageKey
+			lastModified = previewRec.UpdatedAt
+			if previewRec.MimeType != nil && strings.TrimSpace(*previewRec.MimeType) != "" {
+				rec.MimeType = previewRec.MimeType
+			}
+		}
 	}
 
 	if share.MaxDownloads != nil && share.DownloadCount >= *share.MaxDownloads {
@@ -682,7 +719,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	obj, err := h.Storage.Stat(r.Context(), rec.StorageKey)
+	obj, err := h.Storage.Stat(r.Context(), storageKey)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
 		return
@@ -695,7 +732,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", obj.ETag)
-	w.Header().Set("Last-Modified", rec.UpdatedAt.UTC().Format(http.TimeFormat))
+	w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
 	if inline {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", rec.OriginalName))
 	} else {
@@ -705,7 +742,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 	rangeHeader := strings.TrimSpace(r.Header.Get("Range"))
 	if rangeHeader == "" {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
-		stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+		stream, err := h.Storage.GetStream(r.Context(), storageKey)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not open file"})
 			return
@@ -713,7 +750,14 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		defer stream.Close()
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, stream)
-		if !inline {
+		if inline {
+			h.insertAudit(r.Context(), nil, "share.public.file.preview", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+				"fileId": fileID,
+			})
+		} else {
+			h.insertAudit(r.Context(), nil, "share.public.file.download", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+				"fileId": fileID,
+			})
 			h.bumpShareDownloadCount(r, share)
 		}
 		return
@@ -725,7 +769,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		writeJSON(w, http.StatusRequestedRangeNotSatisfiable, map[string]string{"error": "invalid range"})
 		return
 	}
-	stream, err := h.Storage.GetRangeStream(r.Context(), rec.StorageKey, start, end)
+	stream, err := h.Storage.GetRangeStream(r.Context(), storageKey, start, end)
 	if err != nil {
 		writeJSON(w, http.StatusRequestedRangeNotSatisfiable, map[string]string{"error": "invalid range"})
 		return
@@ -736,7 +780,16 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
 	w.WriteHeader(http.StatusPartialContent)
 	_, _ = io.Copy(w, stream)
-	if !inline {
+	if inline {
+		h.insertAudit(r.Context(), nil, "share.public.file.preview", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+			"fileId": fileID,
+			"range":  true,
+		})
+	} else {
+		h.insertAudit(r.Context(), nil, "share.public.file.download", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+			"fileId": fileID,
+			"range":  true,
+		})
 		h.bumpShareDownloadCount(r, share)
 	}
 }
@@ -797,6 +850,9 @@ func (h Handler) publicShareFolderZip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.streamFolderZip(w, r, folderID, share.OwnerID, normalizeNodeName(folderName)+".zip")
+	h.insertAudit(r.Context(), nil, "share.public.folder.download_zip", "share", &share.ID, clientIP(r), r.UserAgent(), map[string]any{
+		"folderId": folderID,
+	})
 	h.bumpShareDownloadCount(r, share)
 }
 
@@ -913,6 +969,7 @@ func (h Handler) resolvePublicShare(r *http.Request, providedPassword string, en
 			return shareRecord{}, fmt.Errorf("share_password_required")
 		}
 		if !auth.VerifyPassword(*rec.PasswordHash, providedPassword) {
+			h.insertAudit(r.Context(), nil, "share.public.password.failed", "share", &rec.ID, clientIP(r), r.UserAgent(), map[string]any{})
 			return shareRecord{}, fmt.Errorf("share_password_invalid")
 		}
 	}

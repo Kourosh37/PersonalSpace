@@ -278,6 +278,17 @@ type fileRecord struct {
 	UpdatedAt    time.Time
 }
 
+type filePreviewRecord struct {
+	ID         string
+	Type       string
+	StorageKey *string
+	MimeType   *string
+	SizeBytes  *int64
+	Status     string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 func (h Handler) fetchOwnedFile(ctx context.Context, userID string, fileID string) (fileRecord, error) {
 	var rec fileRecord
 	err := h.DB.QueryRow(ctx, `
@@ -287,6 +298,50 @@ func (h Handler) fetchOwnedFile(ctx context.Context, userID string, fileID strin
 	`, fileID, userID).Scan(&rec.ID, &rec.OwnerID, &rec.FolderID, &rec.Name, &rec.OriginalName, &rec.StorageKey, &rec.SizeBytes, &rec.MimeType, &rec.Extension, &rec.UpdatedAt)
 	if err != nil {
 		return fileRecord{}, err
+	}
+	return rec, nil
+}
+
+func (h Handler) listFilePreviews(ctx context.Context, fileID string) ([]filePreviewRecord, error) {
+	rows, err := h.DB.Query(ctx, `
+		SELECT id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at
+		FROM file_previews
+		WHERE file_id=$1
+		ORDER BY created_at DESC
+	`, fileID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]filePreviewRecord, 0, 8)
+	for rows.Next() {
+		var rec filePreviewRecord
+		if err := rows.Scan(&rec.ID, &rec.Type, &rec.StorageKey, &rec.MimeType, &rec.SizeBytes, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (h Handler) getReadyFilePreview(ctx context.Context, fileID string, previewType string) (filePreviewRecord, error) {
+	var rec filePreviewRecord
+	err := h.DB.QueryRow(ctx, `
+		SELECT id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at
+		FROM file_previews
+		WHERE file_id=$1
+		  AND preview_type=$2
+		  AND status='ready'
+		  AND storage_key IS NOT NULL
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, fileID, previewType).Scan(&rec.ID, &rec.Type, &rec.StorageKey, &rec.MimeType, &rec.SizeBytes, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt)
+	if err != nil {
+		return filePreviewRecord{}, err
 	}
 	return rec, nil
 }
@@ -364,6 +419,24 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
 		return
 	}
+	previews, previewsErr := h.listFilePreviews(r.Context(), rec.ID)
+	if previewsErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file previews"})
+		return
+	}
+	previewItems := make([]map[string]any, 0, len(previews))
+	for _, p := range previews {
+		previewItems = append(previewItems, map[string]any{
+			"id":         p.ID,
+			"type":       p.Type,
+			"storageKey": p.StorageKey,
+			"mimeType":   p.MimeType,
+			"sizeBytes":  p.SizeBytes,
+			"status":     p.Status,
+			"createdAt":  p.CreatedAt,
+			"updatedAt":  p.UpdatedAt,
+		})
+	}
 	if allowed, reason := previewAllowedByConfig(previewCfg, category, false); !allowed {
 		supported = false
 		method = "disabled"
@@ -371,33 +444,39 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 			reason = "preview is disabled by admin settings"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"fileId":           rec.ID,
-			"name":             rec.Name,
-			"mimeType":         rec.MimeType,
-			"sizeBytes":        rec.SizeBytes,
-			"category":         category,
-			"method":           method,
-			"supported":        supported,
-			"textMaxBytes":     h.previewTextMaxBytes(r),
-			"streamPreviewURL": "/api/files/" + rec.ID + "/preview",
-			"textPreviewURL":   "/api/files/" + rec.ID + "/preview-content",
-			"reason":           reason,
+			"fileId":            rec.ID,
+			"name":              rec.Name,
+			"mimeType":          rec.MimeType,
+			"sizeBytes":         rec.SizeBytes,
+			"category":          category,
+			"method":            method,
+			"supported":         supported,
+			"textMaxBytes":      h.previewTextMaxBytes(r),
+			"streamPreviewURL":  "/api/files/" + rec.ID + "/preview",
+			"textPreviewURL":    "/api/files/" + rec.ID + "/preview-content",
+			"thumbnailURL":      "/api/files/" + rec.ID + "/preview?variant=thumbnail",
+			"pdfPreviewURL":     "/api/files/" + rec.ID + "/preview?variant=pdf",
+			"generatedPreviews": previewItems,
+			"reason":            reason,
 		})
 		return
 	}
 
 	textMaxBytes := h.previewTextMaxBytes(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"fileId":           rec.ID,
-		"name":             rec.Name,
-		"mimeType":         rec.MimeType,
-		"sizeBytes":        rec.SizeBytes,
-		"category":         category,
-		"method":           method,
-		"supported":        supported,
-		"textMaxBytes":     textMaxBytes,
-		"streamPreviewURL": "/api/files/" + rec.ID + "/preview",
-		"textPreviewURL":   "/api/files/" + rec.ID + "/preview-content",
+		"fileId":            rec.ID,
+		"name":              rec.Name,
+		"mimeType":          rec.MimeType,
+		"sizeBytes":         rec.SizeBytes,
+		"category":          category,
+		"method":            method,
+		"supported":         supported,
+		"textMaxBytes":      textMaxBytes,
+		"streamPreviewURL":  "/api/files/" + rec.ID + "/preview",
+		"textPreviewURL":    "/api/files/" + rec.ID + "/preview-content",
+		"thumbnailURL":      "/api/files/" + rec.ID + "/preview?variant=thumbnail",
+		"pdfPreviewURL":     "/api/files/" + rec.ID + "/preview?variant=pdf",
+		"generatedPreviews": previewItems,
 	})
 }
 
@@ -499,6 +578,15 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
 		return
 	}
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	if !previewCfg.Enabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview generation is disabled by admin settings"})
+		return
+	}
 
 	type createPreviewJobRequest struct {
 		JobType string `json:"jobType"`
@@ -512,8 +600,21 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 	if jobType == "" {
 		jobType = "metadata"
 	}
-	if jobType != "metadata" {
+	if jobType != "metadata" && jobType != "thumbnail" && jobType != "office_to_pdf" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview job type"})
+		return
+	}
+	category, _, _ := detectPreviewMode(rec)
+	if jobType == "thumbnail" && category != "image" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thumbnail preview is only supported for image files"})
+		return
+	}
+	if jobType == "office_to_pdf" && category != "office" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "office_to_pdf preview is only supported for office document files"})
+		return
+	}
+	if jobType == "office_to_pdf" && !previewCfg.OfficeEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "office preview is disabled by admin settings"})
 		return
 	}
 
@@ -621,48 +722,23 @@ func (h Handler) listFilePreviewJobs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	previewRows, err := h.DB.Query(r.Context(), `
-		SELECT id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at
-		FROM file_previews
-		WHERE file_id=$1
-		ORDER BY created_at DESC
-	`, rec.ID)
+	previewRecords, err := h.listFilePreviews(r.Context(), rec.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list file previews"})
 		return
 	}
-	defer previewRows.Close()
-
 	previews := make([]map[string]any, 0, 8)
-	for previewRows.Next() {
-		var id string
-		var previewType string
-		var storageKey *string
-		var mimeType *string
-		var sizeBytes *int64
-		var status string
-		var createdAt time.Time
-		var updatedAt time.Time
-
-		if err := previewRows.Scan(&id, &previewType, &storageKey, &mimeType, &sizeBytes, &status, &createdAt, &updatedAt); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not scan file previews"})
-			return
-		}
-
+	for _, p := range previewRecords {
 		previews = append(previews, map[string]any{
-			"id":         id,
-			"type":       previewType,
-			"storageKey": storageKey,
-			"mimeType":   mimeType,
-			"sizeBytes":  sizeBytes,
-			"status":     status,
-			"createdAt":  createdAt,
-			"updatedAt":  updatedAt,
+			"id":         p.ID,
+			"type":       p.Type,
+			"storageKey": p.StorageKey,
+			"mimeType":   p.MimeType,
+			"sizeBytes":  p.SizeBytes,
+			"status":     p.Status,
+			"createdAt":  p.CreatedAt,
+			"updatedAt":  p.UpdatedAt,
 		})
-	}
-	if previewRows.Err() != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file previews"})
-		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -691,6 +767,8 @@ func detectPreviewMode(rec fileRecord) (category string, method string, supporte
 		return "audio", "stream", true
 	case mimeType == "application/pdf":
 		return "pdf", "stream", true
+	case isOfficeLikeMime(mimeType) || isOfficeLikeExt(ext):
+		return "office", "async_generated", true
 	case isTextLikeMime(mimeType) || isTextLikeExt(ext):
 		return "text", "text_partial", true
 	default:
@@ -707,6 +785,9 @@ func previewAllowedByConfig(cfg previewRuntimeSettings, category string, public 
 	}
 	if (category == "video" || category == "audio") && !cfg.MediaEnabled {
 		return false, "media preview is disabled by admin settings"
+	}
+	if category == "office" && !cfg.OfficeEnabled {
+		return false, "office preview is disabled by admin settings"
 	}
 	return true, ""
 }
@@ -728,6 +809,33 @@ func isTextLikeExt(ext string) bool {
 	case "txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "log", "ini", "env", "conf", "toml", "sql",
 		"js", "jsx", "ts", "tsx", "html", "css", "scss", "go", "py", "java", "c", "cpp", "h", "hpp", "cs",
 		"php", "rb", "rs", "swift", "kt", "sh", "bash", "zsh", "ps1", "dockerfile", "makefile":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOfficeLikeMime(mimeType string) bool {
+	switch mimeType {
+	case "application/msword",
+		"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"application/vnd.ms-excel",
+		"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"application/vnd.ms-powerpoint",
+		"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+		"application/vnd.oasis.opendocument.text",
+		"application/vnd.oasis.opendocument.spreadsheet",
+		"application/vnd.oasis.opendocument.presentation",
+		"application/rtf":
+		return true
+	default:
+		return false
+	}
+}
+
+func isOfficeLikeExt(ext string) bool {
+	switch ext {
+	case "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf":
 		return true
 	default:
 		return false
@@ -778,12 +886,9 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 		return
 	}
 
-	obj, err := h.Storage.Stat(r.Context(), rec.StorageKey)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
-		return
-	}
-
+	storageKey := rec.StorageKey
+	lastModified := rec.UpdatedAt
+	displayName := rec.OriginalName
 	mimeType := "application/octet-stream"
 	if rec.MimeType != nil && *rec.MimeType != "" {
 		mimeType = *rec.MimeType
@@ -803,6 +908,39 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
 			return
 		}
+
+		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant != "" {
+			if variant != "thumbnail" && variant != "pdf" && variant != "metadata" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview variant"})
+				return
+			}
+			previewRec, err := h.getReadyFilePreview(r.Context(), rec.ID, variant)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					writeJSON(w, http.StatusNotFound, map[string]string{"error": "requested preview variant is not ready"})
+					return
+				}
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview variant"})
+				return
+			}
+			if previewRec.StorageKey == nil || strings.TrimSpace(*previewRec.StorageKey) == "" {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "requested preview variant is not ready"})
+				return
+			}
+
+			storageKey = *previewRec.StorageKey
+			lastModified = previewRec.UpdatedAt
+			if previewRec.MimeType != nil && strings.TrimSpace(*previewRec.MimeType) != "" {
+				mimeType = *previewRec.MimeType
+			}
+		}
+	}
+
+	obj, err := h.Storage.Stat(r.Context(), storageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
 	}
 
 	dispositionType := "attachment"
@@ -813,13 +951,13 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("ETag", obj.ETag)
-	w.Header().Set("Last-Modified", rec.UpdatedAt.UTC().Format(http.TimeFormat))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", dispositionType, rec.OriginalName))
+	w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", dispositionType, displayName))
 
 	rangeHeader := strings.TrimSpace(r.Header.Get("Range"))
 	if rangeHeader == "" {
 		w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
-		stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+		stream, err := h.Storage.GetStream(r.Context(), storageKey)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not open file"})
 			return
@@ -837,7 +975,7 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 		return
 	}
 
-	stream, err := h.Storage.GetRangeStream(r.Context(), rec.StorageKey, start, end)
+	stream, err := h.Storage.GetRangeStream(r.Context(), storageKey, start, end)
 	if err != nil {
 		writeJSON(w, http.StatusRequestedRangeNotSatisfiable, map[string]string{"error": "invalid range"})
 		return

@@ -51,6 +51,8 @@ Notes:
   plus user management (`/api/admin/users*`)
 - Security: Redis-backed rate limiting for login and public share access
 - Maintenance: periodic cleanup of expired sessions and expired upload sessions
+- Preview worker: async `metadata` and `thumbnail` jobs persisted in `preview_jobs`/`file_previews`
+- Public share access events are audited (info access, password checks, preview/download access)
 
 ## Next phases
 

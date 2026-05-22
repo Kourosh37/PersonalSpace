@@ -17,6 +17,7 @@ type previewRuntimeSettings struct {
 	Enabled              bool
 	PublicPreviewEnabled bool
 	MediaEnabled         bool
+	OfficeEnabled        bool
 }
 
 func loadBoolSettings(ctx context.Context, db *pgxpool.Pool, defaults map[string]bool) (map[string]bool, error) {
@@ -77,6 +78,7 @@ func (h Handler) getPreviewRuntimeSettings(ctx context.Context) (previewRuntimeS
 		"preview.enabled":                true,
 		"preview.public_preview_enabled": true,
 		"preview.media_enabled":          true,
+		"preview.office_enabled":         false,
 	})
 	if err != nil {
 		return previewRuntimeSettings{}, err
@@ -86,5 +88,6 @@ func (h Handler) getPreviewRuntimeSettings(ctx context.Context) (previewRuntimeS
 		Enabled:              values["preview.enabled"],
 		PublicPreviewEnabled: values["preview.public_preview_enabled"],
 		MediaEnabled:         values["preview.media_enabled"],
+		OfficeEnabled:        values["preview.office_enabled"],
 	}, nil
 }
