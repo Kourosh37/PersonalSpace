@@ -31,7 +31,7 @@ This phase also includes an initial working file workflow:
 - CSRF protection for state-changing API requests using Origin/Referer validation
 - Background maintenance loop for expired sessions and expired upload cleanup
 - Async preview worker queue for metadata previews (`preview_jobs` -> `file_previews`)
-- Async thumbnail preview generation for image files (`jobType=thumbnail`)
+- Async thumbnail preview generation for image/video files (`jobType=thumbnail`)
 - Preview stream variants via `GET /api/files/:id/preview?variant=thumbnail|pdf|metadata` (when generated)
 - Office-to-PDF conversion via preview worker (`jobType=office_to_pdf`) using bundled LibreOffice
 - Media metadata enrichment for audio/video preview metadata via bundled `ffprobe`

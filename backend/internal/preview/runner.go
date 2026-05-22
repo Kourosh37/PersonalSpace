@@ -271,6 +271,10 @@ func (r Runner) generateThumbnailPreview(ctx context.Context, job previewJob) er
 		return err
 	}
 
+	if isVideoFile(file) {
+		return r.generateVideoThumbnailPreview(ctx, job, file)
+	}
+
 	stream, err := r.Storage.GetStream(ctx, file.StorageKey)
 	if err != nil {
 		return err
@@ -293,6 +297,89 @@ func (r Runner) generateThumbnailPreview(ctx context.Context, job previewJob) er
 		return err
 	}
 	if err := r.upsertFilePreview(ctx, file.ID, "thumbnail", outputKey, "image/jpeg", int64(out.Len())); err != nil {
+		return err
+	}
+
+	_, err = r.DB.Exec(ctx, `
+		UPDATE preview_jobs
+		SET status='completed', output_storage_key=$1, error_message=NULL, updated_at=now()
+		WHERE id=$2
+	`, outputKey, job.ID)
+	return err
+}
+
+func (r Runner) generateVideoThumbnailPreview(ctx context.Context, job previewJob, file fileForMetadata) error {
+	tmpDir, err := os.MkdirTemp("", "space-video-thumb-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ext := "bin"
+	if file.Extension != nil && strings.TrimSpace(*file.Extension) != "" {
+		ext = strings.TrimPrefix(strings.TrimSpace(*file.Extension), ".")
+	}
+	sourcePath := filepath.Join(tmpDir, "source."+ext)
+	sourceFile, err := os.Create(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	stream, err := r.Storage.GetStream(ctx, file.StorageKey)
+	if err != nil {
+		sourceFile.Close()
+		return err
+	}
+	if _, err := io.Copy(sourceFile, stream); err != nil {
+		stream.Close()
+		sourceFile.Close()
+		return err
+	}
+	stream.Close()
+	if err := sourceFile.Close(); err != nil {
+		return err
+	}
+
+	outPath := filepath.Join(tmpDir, "thumb.jpg")
+	cmd := exec.CommandContext(
+		ctx,
+		"ffmpeg",
+		"-y",
+		"-ss", "00:00:01",
+		"-i", sourcePath,
+		"-frames:v", "1",
+		"-vf", "scale='min(320,iw)':-1",
+		outPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Retry without seek for very short videos.
+		cmd2 := exec.CommandContext(
+			ctx,
+			"ffmpeg",
+			"-y",
+			"-i", sourcePath,
+			"-frames:v", "1",
+			"-vf", "scale='min(320,iw)':-1",
+			outPath,
+		)
+		if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
+			return fmt.Errorf("ffmpeg thumbnail failed: %v (%s / %s)", err2, strings.TrimSpace(string(out)), strings.TrimSpace(string(out2)))
+		}
+	}
+
+	thumbBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		return err
+	}
+	if len(thumbBytes) == 0 {
+		return fmt.Errorf("video thumbnail is empty")
+	}
+
+	outputKey := fmt.Sprintf("previews/thumbnails/%s.jpg", file.ID)
+	if err := r.Storage.PutStream(ctx, outputKey, bytes.NewReader(thumbBytes)); err != nil {
+		return err
+	}
+	if err := r.upsertFilePreview(ctx, file.ID, "thumbnail", outputKey, "image/jpeg", int64(len(thumbBytes))); err != nil {
 		return err
 	}
 
@@ -478,6 +565,22 @@ func resizeImageContain(src image.Image, maxW int, maxH int) image.Image {
 		}
 	}
 	return dst
+}
+
+func isVideoFile(file fileForMetadata) bool {
+	if file.MimeType != nil {
+		mimeType := strings.ToLower(strings.TrimSpace(*file.MimeType))
+		if strings.HasPrefix(mimeType, "video/") {
+			return true
+		}
+	}
+	if file.Extension != nil {
+		switch strings.ToLower(strings.TrimSpace(*file.Extension)) {
+		case "mp4", "webm", "mov", "mkv", "m4v", "avi", "ogv":
+			return true
+		}
+	}
+	return false
 }
 
 func (r Runner) fetchFileForMetadata(ctx context.Context, fileID string) (fileForMetadata, error) {

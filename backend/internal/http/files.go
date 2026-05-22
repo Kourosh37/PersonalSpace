@@ -699,12 +699,16 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	category, _, _ := detectPreviewMode(rec)
-	if jobType == "thumbnail" && category != "image" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thumbnail preview is only supported for image files"})
+	if jobType == "thumbnail" && category != "image" && category != "video" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "thumbnail preview is only supported for image and video files"})
 		return
 	}
 	if jobType == "thumbnail" && !previewCfg.ImageThumbnails {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "image thumbnails are disabled by admin settings"})
+		return
+	}
+	if jobType == "thumbnail" && category == "video" && !previewCfg.MediaEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "media preview is disabled by admin settings"})
 		return
 	}
 	if jobType == "office_to_pdf" && category != "office" {
