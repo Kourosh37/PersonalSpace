@@ -1,62 +1,151 @@
-# Architecture (Phase 1)
+# Architecture
 
-## Services
+## High-Level Model
 
-- `app`: single Space application image (Next.js frontend + Go backend in one container).
-- `preview-worker`: asynchronous preview processor (same image, different entrypoint).
-- `postgres`: primary datastore.
-- `redis`: rate limiting and background coordination support.
+Space is a Docker-first application composed of:
 
-Notes:
-- External reverse proxy (existing Caddy/Nginx/Traefik) should point only to `app:3000`.
-- Next.js rewrites `/api/*` and `/healthz` to backend at `127.0.0.1:8080` inside the same container.
+- A single production application image.
+- PostgreSQL for durable relational state.
+- Redis for rate limiting.
+- A Docker volume for file and preview storage.
+- An external reverse proxy managed outside this project.
 
-## Backend modules
+The application image contains:
 
-- `internal/config`: env config.
-- `internal/db`: postgres connection.
-- `internal/auth`: password hashing and verification.
-- `internal/http`: router + handlers.
-- `internal/middleware`: auth/admin middleware.
-- `internal/settings`: system setting access.
-- `internal/storage`: storage abstraction interface.
+- Go backend binaries.
+- Next.js standalone frontend server.
+- Migration CLI.
+- Admin creation CLI.
+- Preview worker CLI.
+- LibreOffice and ffmpeg tooling for preview generation.
 
-## Security baseline
+## Runtime Services
 
-- Argon2id password hashing.
-- Random session tokens (stored as SHA-256 hash in DB).
-- HttpOnly cookie sessions.
-- Admin role checks on `/api/admin/*`.
-- HTTP security headers (`HSTS`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`, `COOP`).
-- CSRF protection on mutating `/api/*` requests via Origin/Referer validation.
-- Audit log entries for login and setting updates.
-- Runtime enforcement of global `sharing.*` and `preview.*` flags on private/public API routes.
+### `app`
 
-## Implemented settings
+The `app` service runs `/app/bin/start-app.sh`, which starts:
 
-- `upload.max_file_size_mode`: `unlimited|custom`
-- `upload.max_file_size_bytes`: nullable bigint in JSON value
+- Go backend on `127.0.0.1:8080` inside the container.
+- Next.js standalone server on `0.0.0.0:3000`.
 
-## Implemented APIs (current)
+External traffic should reach only port `3000`.
 
-- Auth: `login`, `logout`, `me`, `change-password`
-- Folders: list items, create, rename, delete, move
-- Files: upload, metadata, rename, delete, move, download, preview (Range)
-- Upload sessions: init, chunk append, status, complete, cancel (custom resumable flow)
-- Tus: create/head/patch/delete resumable uploads (`/api/uploads/tus/*`)
-- Shares: create/get/list/update/delete/revoke + public share info/items/file download/file preview
-- ZIP: private folder ZIP + public shared folder ZIP
-- Admin: upload max file size settings (`GET/PATCH /api/admin/settings/upload`)
-  plus generic/system settings, storage summary/recalculate, expired upload cleanup, audit logs
-  plus user management (`/api/admin/users*`)
-- Security: Redis-backed rate limiting for login and public share access
-- Maintenance: periodic cleanup of expired sessions and expired upload sessions
-- Preview worker: async `metadata`, `thumbnail` (image/video), and `office_to_pdf` jobs persisted in `preview_jobs`/`file_previews`
-- Public share access events are audited (info access, password checks, preview/download access)
-- CSV preview content endpoint returns bounded tabular preview with delimiter detection and row limits
-- Dashboard UI includes preview diagnostics and manual queue controls for preview job types
+Next.js rewrites:
 
-## Next phases
+- `/api/*` -> `http://127.0.0.1:8080/api/*`
+- `/healthz` -> `http://127.0.0.1:8080/healthz`
 
-- Preview pipeline + worker
-- Remaining admin settings coverage and richer audit filtering UI
+### `preview-worker`
+
+The `preview-worker` service uses the same image and starts `/app/bin/preview-worker`.
+
+It polls `preview_jobs`, reads source files from storage, writes generated previews to storage, and records `file_previews`.
+
+### `postgres`
+
+PostgreSQL stores:
+
+- Users.
+- Sessions.
+- Folders.
+- Files.
+- Upload sessions.
+- Share links.
+- Preview jobs.
+- File previews.
+- System settings.
+- Audit logs.
+- Migration state.
+
+### `redis`
+
+Redis stores rate-limit counters. If Redis is unavailable, the backend logs a warning and continues without strict Redis-backed limiting.
+
+## Backend Modules
+
+- `internal/config`: environment parsing and safety validation.
+- `internal/db`: PostgreSQL connection and migration guard.
+- `internal/auth`: Argon2id password hashing and random session token helpers.
+- `internal/http`: API routes and handlers.
+- `internal/middleware`: auth, admin, CSRF, security headers, and structured request logging.
+- `internal/settings`: upload setting persistence and validation.
+- `internal/storage`: storage abstraction and local Docker-volume implementation.
+- `internal/preview`: asynchronous preview worker.
+- `internal/maintenance`: expired session/upload cleanup.
+- `internal/security`: Redis-backed rate limiter.
+- `internal/observability`: metrics counters and Prometheus output.
+- `internal/logging`: structured JSON logging setup.
+
+## Data Flow
+
+### Login
+
+1. User submits username/password.
+2. Backend verifies Argon2id password hash.
+3. Backend creates a random session token.
+4. SHA-256 token hash is stored in `sessions`.
+5. Raw token is returned as an HttpOnly cookie.
+
+### Authenticated Request
+
+1. Middleware reads session cookie.
+2. Cookie token is hashed.
+3. Active session and active user are loaded from PostgreSQL.
+4. User is attached to request context.
+5. Admin middleware checks role for `/api/admin/*`.
+
+### Multipart Upload
+
+1. Backend streams multipart file into temp storage.
+2. File size policy is enforced during streaming.
+3. Storage object is moved to final key.
+4. File metadata is inserted.
+5. User storage usage is updated under a transaction.
+6. Quota is checked under row lock.
+
+### Resumable Upload
+
+1. Client creates upload session.
+2. Chunks are appended at expected offsets.
+3. Client completes the session.
+4. Backend moves temp object to final storage key.
+5. File metadata and user usage are committed.
+
+### Share Access
+
+1. Public token is hashed and resolved.
+2. Global sharing settings are checked.
+3. Expiration, revoke state, password, and download limits are checked.
+4. Target file/folder permissions are enforced.
+5. Preview/download/list response is returned when allowed.
+
+### Preview Job
+
+1. User or system creates preview job.
+2. Worker claims queued job.
+3. Worker reads source file from storage.
+4. Worker generates metadata, thumbnail, or PDF.
+5. Worker writes preview object to storage.
+6. Worker upserts `file_previews` and completes job.
+
+## Security Boundaries
+
+- Frontend routing is not a security boundary.
+- Backend middleware enforces session and admin checks.
+- Storage files are not directly exposed by the reverse proxy.
+- Public share APIs resolve and validate share policy on every request.
+- CSRF protection is enforced for mutating API requests with session cookies.
+- Risky inline preview formats are blocked.
+
+## Observability
+
+Runtime observability includes:
+
+- `/healthz` for service health.
+- `/metrics` for Prometheus-compatible metrics.
+- Structured JSON logs with request ID, status, duration, method, path, and service labels.
+- Audit logs in PostgreSQL for security-sensitive events.
+
+## Deployment Boundary
+
+The project intentionally excludes an internal Caddy/Nginx service. Production deployments should use an external reverse proxy already managed by the host operator.

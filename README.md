@@ -101,15 +101,25 @@ cp .env.example .env
 
 ## Offline deployment
 
-See:
-- `docs/offline-deployment.md`
+Start with `docs/index.md`.
+
+Core documentation:
+- `docs/product-features.md`
+- `docs/user-guide.md`
+- `docs/admin-guide.md`
+- `docs/deployment-guide.md`
+- `docs/configuration-reference.md`
+- `docs/operations-guide.md`
+- `docs/testing-guide.md`
+- `docs/troubleshooting.md`
+- `docs/api-contract.md`
 - `docs/architecture.md`
+- `docs/security-operations.md`
 - `docs/security-threat-model.md`
-- `docs/runbook.md`
+- `docs/offline-deployment.md`
 - `docs/reverse-proxy.md`
 - `docs/compatibility-matrix.md`
-- `docs/api-contract.md`
-- `docs/security-operations.md`
+- `docs/alerting-policy.md`
 
 ## Notes
 
