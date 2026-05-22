@@ -27,9 +27,6 @@ Details: Verify download-limit, expiration, revoke behavior, and optional passwo
 
 ## 2) Reliability, testing, and CI/CD
 
-- [ ] Add backend automated tests.
-Details: Current unit coverage exists for password hashing/verification, upload settings validation, settings validation, TUS metadata parsing, HTTP range parsing, preview classification/policy helpers, folder sorting/search helpers, and preview image/video helpers. Remaining: DB-backed integration coverage for session/auth flows, upload persistence/quota behavior, share permissions, public share policy enforcement, and preview job persistence.
-
 - [x] Add CI pipeline.
 Details: Run `go test`, frontend build/type checks, migration checks, and Docker build smoke validation on each change.
 

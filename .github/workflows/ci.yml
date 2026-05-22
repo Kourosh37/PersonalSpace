@@ -7,6 +7,20 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: space_test
+          POSTGRES_USER: space
+          POSTGRES_PASSWORD: space
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U space -d space_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     defaults:
       run:
         working-directory: backend
@@ -18,6 +32,9 @@ jobs:
       - name: Go vet
         run: go vet ./...
       - name: Go test
+        env:
+          INTEGRATION_DB_DSN: postgres://space:space@127.0.0.1:5432/space_test?sslmode=disable
+          SPACE_TEST_ALLOW_DB_RESET: "1"
         run: go test ./...
 
   frontend:
