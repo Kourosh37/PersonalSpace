@@ -12,6 +12,7 @@ import (
 	"space/backend/internal/auth"
 	"space/backend/internal/config"
 	"space/backend/internal/middleware"
+	"space/backend/internal/observability"
 	"space/backend/internal/security"
 	"space/backend/internal/settings"
 	"space/backend/internal/storage"
@@ -43,6 +44,9 @@ func (h Handler) Router() http.Handler {
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		observability.WritePrometheus(r.Context(), w, h.DB)
 	})
 
 	r.Route("/api", func(api chi.Router) {

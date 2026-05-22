@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"space/backend/internal/middleware"
+	"space/backend/internal/observability"
 	"space/backend/internal/settings"
 
 	"github.com/go-chi/chi/v5"
@@ -72,6 +73,15 @@ func (h Handler) tusCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if uploadCfg.Mode == "custom" && uploadCfg.MaxFileSizeBytes != nil && uploadLength > *uploadCfg.MaxFileSizeBytes {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "This file exceeds the maximum allowed upload size."})
+		return
+	}
+	allowed, err := h.canUserStoreBytes(r.Context(), user.ID, uploadLength)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not validate user storage quota"})
+		return
+	}
+	if !allowed {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "upload exceeds your storage quota"})
 		return
 	}
 
@@ -315,6 +325,10 @@ func (h Handler) finalizeTusSessionTx(r *http.Request, tx pgx.Tx, session upload
 		_ = h.Storage.Move(r.Context(), finalKey, session.TempKey)
 		return err
 	}
+	if err := h.ensureQuotaAllowsSizeTx(r.Context(), tx, session.OwnerID, session.UploadedBytes); err != nil {
+		_ = h.Storage.Move(r.Context(), finalKey, session.TempKey)
+		return err
+	}
 
 	_, err = tx.Exec(r.Context(), `UPDATE upload_sessions SET status='completed', file_id=$1, updated_at=now() WHERE id=$2`, fileID, session.ID)
 	if err != nil {
@@ -323,6 +337,7 @@ func (h Handler) finalizeTusSessionTx(r *http.Request, tx pgx.Tx, session upload
 	}
 
 	h.insertAudit(r.Context(), &session.OwnerID, "upload.completed", "upload_session", &session.ID, clientIP(r), r.UserAgent(), map[string]any{"fileId": fileID, "protocol": "tus"})
+	observability.AddUploadedBytes(session.UploadedBytes)
 	return nil
 }
 

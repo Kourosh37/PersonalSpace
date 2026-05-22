@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"space/backend/internal/observability"
+
+	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
@@ -19,6 +22,10 @@ func StructuredRequestLogger(next http.Handler) http.Handler {
 		if status == 0 {
 			status = http.StatusOK
 		}
+		routePattern := chi.RouteContext(r.Context()).RoutePattern()
+		durationMs := time.Since(start).Milliseconds()
+		observability.RecordHTTPRequest(r.Method, routePattern, status, durationMs)
+
 		level := slog.LevelInfo
 		if status >= 500 {
 			level = slog.LevelError
@@ -36,7 +43,7 @@ func StructuredRequestLogger(next http.Handler) http.Handler {
 			slog.String("query", r.URL.RawQuery),
 			slog.Int("status", status),
 			slog.Int("bytes", rec.BytesWritten()),
-			slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.Int64("duration_ms", durationMs),
 			slog.String("remote_addr", r.RemoteAddr),
 			slog.String("user_agent", r.UserAgent()),
 		)

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"space/backend/internal/middleware"
+	"space/backend/internal/observability"
 	"space/backend/internal/settings"
 
 	"github.com/go-chi/chi/v5"
@@ -103,6 +105,17 @@ func (h Handler) uploadInit(w http.ResponseWriter, r *http.Request) {
 	if uploadCfg.Mode == "custom" && uploadCfg.MaxFileSizeBytes != nil && req.TotalSizeBytes != nil && *req.TotalSizeBytes > *uploadCfg.MaxFileSizeBytes {
 		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "This file exceeds the maximum allowed upload size."})
 		return
+	}
+	if req.TotalSizeBytes != nil {
+		allowed, err := h.canUserStoreBytes(r.Context(), user.ID, *req.TotalSizeBytes)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not validate user storage quota"})
+			return
+		}
+		if !allowed {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "upload exceeds your storage quota"})
+			return
+		}
 	}
 
 	uploadID := uuid.NewString()
@@ -356,6 +369,11 @@ func (h Handler) uploadComplete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not update user storage usage"})
 		return
 	}
+	if err := h.ensureQuotaAllowsSizeTx(r.Context(), tx, user.ID, session.UploadedBytes); err != nil {
+		_ = h.Storage.Move(r.Context(), finalKey, session.TempKey)
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "upload exceeds your storage quota"})
+		return
+	}
 
 	_, err = tx.Exec(r.Context(), `
 		UPDATE upload_sessions
@@ -375,6 +393,7 @@ func (h Handler) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.insertAudit(r.Context(), &user.ID, "upload.completed", "upload_session", &uploadID, clientIP(r), r.UserAgent(), map[string]any{"fileId": fileID, "size": session.UploadedBytes})
+	observability.AddUploadedBytes(session.UploadedBytes)
 	writeJSON(w, http.StatusOK, map[string]any{"id": uploadID, "status": "completed", "fileId": fileID})
 }
 
@@ -463,4 +482,28 @@ func lockUploadSession(r *http.Request, tx pgx.Tx, ownerID string, uploadID stri
 		return uploadSessionRecord{}, err
 	}
 	return rec, nil
+}
+
+func (h Handler) canUserStoreBytes(ctx context.Context, userID string, additionalBytes int64) (bool, error) {
+	var quota *int64
+	var used int64
+	if err := h.DB.QueryRow(ctx, `SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE id=$1`, userID).Scan(&quota, &used); err != nil {
+		return false, err
+	}
+	if quota == nil {
+		return true, nil
+	}
+	return used+additionalBytes <= *quota, nil
+}
+
+func (h Handler) ensureQuotaAllowsSizeTx(ctx context.Context, tx pgx.Tx, userID string, additionalBytes int64) error {
+	var quota *int64
+	var used int64
+	if err := tx.QueryRow(ctx, `SELECT storage_quota_bytes, used_storage_bytes FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&quota, &used); err != nil {
+		return err
+	}
+	if quota != nil && used > *quota {
+		return errors.New("quota exceeded")
+	}
+	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"space/backend/internal/middleware"
+	"space/backend/internal/observability"
 	"space/backend/internal/settings"
 
 	"github.com/go-chi/chi/v5"
@@ -138,6 +139,17 @@ func (h Handler) uploadFiles(w http.ResponseWriter, r *http.Request) {
 		}
 
 		now := time.Now().UTC()
+		allowed, quotaErr := h.canUserStoreBytes(r.Context(), user.ID, size)
+		if quotaErr != nil {
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not validate user storage quota"})
+			continue
+		}
+		if !allowed {
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "upload exceeds your storage quota"})
+			continue
+		}
 		tx, err := h.DB.Begin(r.Context())
 		if err != nil {
 			_ = h.Storage.Delete(r.Context(), finalKey)
@@ -167,6 +179,12 @@ func (h Handler) uploadFiles(w http.ResponseWriter, r *http.Request) {
 			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "could not update user usage"})
 			continue
 		}
+		if err := h.ensureQuotaAllowsSizeTx(r.Context(), tx, user.ID, size); err != nil {
+			tx.Rollback(r.Context())
+			_ = h.Storage.Delete(r.Context(), finalKey)
+			results = append(results, uploadedFileResult{OriginalName: originalName, Error: "upload exceeds your storage quota"})
+			continue
+		}
 
 		if err := tx.Commit(r.Context()); err != nil {
 			_ = h.Storage.Delete(r.Context(), finalKey)
@@ -175,6 +193,7 @@ func (h Handler) uploadFiles(w http.ResponseWriter, r *http.Request) {
 		}
 
 		created++
+		observability.AddUploadedBytes(size)
 		h.insertAudit(r.Context(), &user.ID, "file.uploaded", "file", &fileID, clientIP(r), r.UserAgent(), map[string]any{"name": targetName, "size": size})
 		results = append(results, uploadedFileResult{ID: fileID, Name: targetName, OriginalName: originalName, SizeBytes: size})
 	}

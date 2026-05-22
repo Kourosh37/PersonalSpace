@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"space/backend/internal/observability"
 	"space/backend/internal/storage"
 
 	"github.com/google/uuid"
@@ -629,6 +630,7 @@ func (r Runner) markJobFailure(ctx context.Context, job previewJob, maxAttempts 
 	if err != nil {
 		return err
 	}
+	observability.IncPreviewJobFailure()
 
 	if status == "failed" {
 		slog.Warn("preview job failed permanently", "job_id", job.ID, "attempts", job.Attempts, "error", message)

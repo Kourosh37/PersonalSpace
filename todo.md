@@ -38,9 +38,6 @@ Details: Execute full restore in a clean environment and verify DB + storage int
 
 ## 3) Operations and observability
 
-- [ ] Add metrics and health observability.
-Details: Expose metrics for upload throughput, preview queue depth, failed jobs, and API error rates.
-
 - [ ] Define minimum alerting policy.
 Details: Alerts for repeated auth failures, DB/Redis connectivity issues, elevated 5xx rates, and preview worker failures.
 
