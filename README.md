@@ -105,6 +105,11 @@ See:
 - `docs/offline-deployment.md`
 - `docs/architecture.md`
 - `docs/security-threat-model.md`
+- `docs/runbook.md`
+- `docs/reverse-proxy.md`
+- `docs/compatibility-matrix.md`
+- `docs/api-contract.md`
+- `docs/security-operations.md`
 
 ## Notes
 

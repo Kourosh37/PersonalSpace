@@ -18,10 +18,28 @@ func validateScopedSetting(prefix string, key string, raw json.RawMessage) error
 
 func validateSharingSetting(key string, raw json.RawMessage) error {
 	switch key {
-	case "sharing.enabled", "sharing.public_preview_enabled", "sharing.public_download_enabled":
+	case "sharing.enabled", "sharing.public_preview_enabled", "sharing.public_download_enabled", "sharing.allow_folder_sharing", "sharing.allow_permanent_links":
 		var v bool
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return fmt.Errorf("%s must be a boolean", key)
+		}
+		return nil
+	case "sharing.default_expiration_hours":
+		var v int64
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return fmt.Errorf("%s must be an integer number", key)
+		}
+		if v < 0 {
+			return fmt.Errorf("%s must be zero or greater", key)
+		}
+		return nil
+	case "sharing.require_password_mode":
+		var v string
+		if err := json.Unmarshal(raw, &v); err != nil {
+			return fmt.Errorf("%s must be a string", key)
+		}
+		if v != "optional" && v != "always" && v != "disabled" {
+			return fmt.Errorf("%s must be optional, always, or disabled", key)
 		}
 		return nil
 	default:

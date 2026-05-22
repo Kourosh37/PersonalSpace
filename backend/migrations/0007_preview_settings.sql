@@ -1,5 +1,9 @@
 INSERT INTO system_settings (id, key, value, value_type, description, is_public, created_at, updated_at)
 VALUES
+  (gen_random_uuid(), 'sharing.allow_folder_sharing', 'true'::jsonb, 'bool', 'Allow folder sharing', false, now(), now()),
+  (gen_random_uuid(), 'sharing.allow_permanent_links', 'true'::jsonb, 'bool', 'Allow non-expiring share links', false, now(), now()),
+  (gen_random_uuid(), 'sharing.require_password_mode', '"optional"'::jsonb, 'string', 'Require password for shares: optional|always|disabled', false, now(), now()),
+  (gen_random_uuid(), 'sharing.default_expiration_hours', '168'::jsonb, 'number', 'Default share expiration window in hours; 0 means no default expiration', false, now(), now()),
   (gen_random_uuid(), 'preview.public_preview_enabled', 'true'::jsonb, 'bool', 'Public share preview enabled', false, now(), now()),
   (gen_random_uuid(), 'preview.office_enabled', 'false'::jsonb, 'bool', 'Office document preview enabled', false, now(), now()),
   (gen_random_uuid(), 'preview.media_enabled', 'true'::jsonb, 'bool', 'Video/audio preview enabled', false, now(), now()),
