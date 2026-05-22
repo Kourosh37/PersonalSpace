@@ -50,6 +50,9 @@ func (h Handler) tusCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+	if !h.enforceRateLimitWithSubject(w, r, "tus_create", user.ID, h.Cfg.TusCreateRatePerMin) {
+		return
+	}
 
 	uploadLengthHeader := strings.TrimSpace(r.Header.Get("Upload-Length"))
 	if uploadLengthHeader == "" {

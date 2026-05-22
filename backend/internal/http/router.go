@@ -134,7 +134,7 @@ func (h Handler) login(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.Cfg.SessionSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: cookieSameSiteMode(h.Cfg.SessionSameSite),
 		Expires:  expiresAt,
 	})
 
@@ -154,7 +154,7 @@ func (h Handler) logout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   h.Cfg.SessionSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: cookieSameSiteMode(h.Cfg.SessionSameSite),
 		MaxAge:   -1,
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -258,4 +258,15 @@ func ReadJSON[T any](r *http.Request, dst *T) error {
 		return errors.New("request body must contain a single json object")
 	}
 	return nil
+}
+
+func cookieSameSiteMode(mode string) http.SameSite {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "strict":
+		return http.SameSiteStrictMode
+	case "none":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }

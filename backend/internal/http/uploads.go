@@ -55,6 +55,9 @@ func (h Handler) uploadInit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+	if !h.enforceRateLimitWithSubject(w, r, "upload_init", user.ID, h.Cfg.UploadInitRatePerMin) {
+		return
+	}
 
 	var req uploadInitRequest
 	if err := ReadJSON(r, &req); err != nil {
@@ -269,12 +272,12 @@ func (h Handler) uploadStatus(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Upload-Offset", strconv.FormatInt(session.UploadedBytes, 10))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":            session.ID,
-		"status":        session.Status,
-		"uploadedBytes": session.UploadedBytes,
+		"id":             session.ID,
+		"status":         session.Status,
+		"uploadedBytes":  session.UploadedBytes,
 		"totalSizeBytes": session.TotalSize,
-		"targetName":    session.TargetName,
-		"originalName":  session.OriginalName,
+		"targetName":     session.TargetName,
+		"originalName":   session.OriginalName,
 	})
 }
 
@@ -282,6 +285,9 @@ func (h Handler) uploadComplete(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.CurrentUser(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+	if !h.enforceRateLimitWithSubject(w, r, "upload_complete", user.ID, h.Cfg.UploadCompleteRatePerMin) {
 		return
 	}
 

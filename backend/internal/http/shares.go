@@ -994,7 +994,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
 			return
 		}
-		category, _, _ := detectPreviewMode(rec)
+		category, method, _ := detectPreviewMode(rec)
 		if allowed, reason := previewAllowedByConfig(previewCfg, category, true); !allowed {
 			if reason == "" {
 				reason = "public preview is disabled by admin settings"
@@ -1004,6 +1004,10 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		}
 
 		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant == "" && method == "text_partial" && isRiskyInlinePreviewType(rec) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "inline preview is blocked for active content; use preview-content endpoint"})
+			return
+		}
 		if variant == "" && category == "office" {
 			variant = "pdf"
 		}
@@ -1054,6 +1058,7 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 	w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
 	if inline {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", rec.OriginalName))
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox")
 	} else {
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", rec.OriginalName))
 	}
@@ -1115,6 +1120,9 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 
 func (h Handler) publicShareFolderZip(w http.ResponseWriter, r *http.Request) {
 	if !h.enforceRateLimit(w, r, "share_access_"+chi.URLParam(r, "token"), h.Cfg.ShareRatePerMin) {
+		return
+	}
+	if !h.enforceRateLimitWithSubject(w, r, "zip_download_public", chi.URLParam(r, "token"), h.Cfg.ZipDownloadRatePerMin) {
 		return
 	}
 

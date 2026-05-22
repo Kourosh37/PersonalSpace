@@ -75,6 +75,16 @@ cp .env.example .env
 - Route your existing external reverse proxy to the `app` service (port `3000`).
 - API routes are proxied internally by Next.js to the embedded backend service, so external proxy only needs one upstream.
 
+## Production security profile
+
+- Set `PUBLIC_BASE_URL` to your HTTPS URL (for example `https://space.example.com`).
+- Keep `BACKEND_ENFORCE_SECURE_COOKIES=true` in production.
+- Set `BACKEND_SESSION_SECURE=true` in production.
+- Keep `BACKEND_CSRF_DISABLED=false` in production.
+- Default session cookie policy uses `SameSite=Lax` (`BACKEND_SESSION_SAME_SITE=lax`).
+- If `BACKEND_SESSION_SAME_SITE=none`, `BACKEND_SESSION_SECURE` must be `true`.
+- Ensure your reverse proxy forwards `X-Forwarded-Proto=https`.
+
 ## Scripts
 
 - `scripts/build-images.sh`
@@ -94,6 +104,7 @@ cp .env.example .env
 See:
 - `docs/offline-deployment.md`
 - `docs/architecture.md`
+- `docs/security-threat-model.md`
 
 ## Notes
 

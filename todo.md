@@ -2,21 +2,7 @@
 
 This file tracks all remaining work needed to make the project fully production-ready based on the current codebase state.
 
-## 1) Security hardening
-
-- [ ] Enforce production cookie/session policy.
-Details: Strong defaults for `Secure`, proper `SameSite`, and explicit reverse-proxy + HTTPS termination behavior.
-
-- [ ] Expand rate-limiting coverage.
-Details: Keep login/share-password limits and add limits for expensive endpoints (preview queueing, zip download, upload init, etc.).
-
-- [ ] Harden risky preview types.
-Details: Define strict handling for SVG/HTML/XML (safe text rendering or strict headers/CSP), and block active content execution paths.
-
-- [ ] Create and document a threat model.
-Details: Cover brute force, token guessing, path traversal, malicious file payloads, content sniffing, and privilege bypass scenarios.
-
-## 2) Product feature gaps
+## 1) Product feature gaps
 
 - [ ] Add optional in-app download progress mode.
 Details: `fetch/streams` mode with progress/speed/ETA where feasible, while keeping native browser download for large files.
@@ -48,7 +34,7 @@ Details: Validate fallback behavior for unsupported codecs/containers, binary-te
 - [ ] Validate share-link policy completeness.
 Details: Verify download-limit, expiration, revoke behavior, and optional password policy all match admin global settings in every public endpoint.
 
-## 3) Reliability, testing, and CI/CD
+## 2) Reliability, testing, and CI/CD
 
 - [ ] Add backend automated tests.
 Details: Unit/integration coverage for auth/session, uploads, share permissions, range streaming, preview pipeline, and settings validation.
@@ -62,7 +48,7 @@ Details: Run `go test`, frontend build/type checks, migration checks, and Docker
 - [ ] Validate backup/restore with disaster-recovery drills.
 Details: Execute full restore in a clean environment and verify DB + storage integrity.
 
-## 4) Operations and observability
+## 3) Operations and observability
 
 - [ ] Standardize structured logging.
 Details: Consistent app/worker logs with request ID, user ID, action, and severity.
@@ -73,7 +59,7 @@ Details: Expose metrics for upload throughput, preview queue depth, failed jobs,
 - [ ] Define minimum alerting policy.
 Details: Alerts for repeated auth failures, DB/Redis connectivity issues, elevated 5xx rates, and preview worker failures.
 
-## 5) Production documentation
+## 4) Production documentation
 
 - [ ] Add an operations runbook.
 Details: Deploy, update, rollback, backup, restore, secret rotation, and incident response steps.
@@ -90,7 +76,7 @@ Details: Document request/response/error models for auth, uploads (tus + custom)
 - [ ] Add security operations documentation.
 Details: Secret management, session invalidation strategy, log-retention policy, and hardening checklist for production rollout.
 
-## 6) Cleanup already completed
+## 5) Cleanup already completed
 
 - [x] Removed legacy deployment artifacts not used in current architecture:
 `backend/Dockerfile`

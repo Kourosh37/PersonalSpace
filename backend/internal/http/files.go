@@ -656,6 +656,9 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+	if !h.enforceRateLimitWithSubject(w, r, "preview_job_create", user.ID, h.Cfg.PreviewJobRatePerMin) {
+		return
+	}
 
 	fileID := chi.URLParam(r, "id")
 	if _, err := uuid.Parse(fileID); err != nil {
@@ -861,6 +864,8 @@ func detectPreviewMode(rec fileRecord) (category string, method string, supporte
 	}
 
 	switch {
+	case isSVGMimeOrExt(mimeType, ext):
+		return "text", "text_partial", true
 	case strings.HasPrefix(mimeType, "image/"):
 		return "image", "stream", true
 	case strings.HasPrefix(mimeType, "video/"):
@@ -875,6 +880,36 @@ func detectPreviewMode(rec fileRecord) (category string, method string, supporte
 		return "text", "text_partial", true
 	default:
 		return "binary", "unsupported", false
+	}
+}
+
+func isSVGMimeOrExt(mimeType string, ext string) bool {
+	if mimeType == "image/svg+xml" {
+		return true
+	}
+	return ext == "svg"
+}
+
+func isRiskyInlinePreviewType(rec fileRecord) bool {
+	mimeType := ""
+	if rec.MimeType != nil {
+		mimeType = strings.ToLower(strings.TrimSpace(*rec.MimeType))
+	}
+	ext := ""
+	if rec.Extension != nil {
+		ext = strings.ToLower(strings.TrimSpace(*rec.Extension))
+	}
+
+	switch mimeType {
+	case "text/html", "application/xhtml+xml", "image/svg+xml", "application/xml", "text/xml":
+		return true
+	}
+
+	switch ext {
+	case "html", "htm", "xhtml", "svg", "xml":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1074,7 +1109,7 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 	}
 
 	if inline {
-		category, _, _ := detectPreviewMode(rec)
+		category, method, _ := detectPreviewMode(rec)
 		previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
 		if cfgErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
@@ -1089,6 +1124,10 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 		}
 
 		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant == "" && method == "text_partial" && isRiskyInlinePreviewType(rec) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "inline preview is blocked for active content; use preview-content endpoint"})
+			return
+		}
 		if variant == "" && category == "office" {
 			variant = "pdf"
 		}
@@ -1128,6 +1167,7 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 	dispositionType := "attachment"
 	if inline {
 		dispositionType = "inline"
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox")
 	}
 
 	w.Header().Set("Content-Type", mimeType)

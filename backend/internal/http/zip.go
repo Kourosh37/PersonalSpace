@@ -31,6 +31,9 @@ func (h Handler) downloadFolderZip(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 		return
 	}
+	if !h.enforceRateLimitWithSubject(w, r, "zip_download_private", user.ID, h.Cfg.ZipDownloadRatePerMin) {
+		return
+	}
 
 	folderID := chi.URLParam(r, "id")
 	if _, err := uuid.Parse(folderID); err != nil {
