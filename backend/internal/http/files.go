@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -532,6 +533,11 @@ func (h Handler) getFilePreviewContent(w http.ResponseWriter, r *http.Request) {
 	if limit <= 0 {
 		limit = 1 * 1024 * 1024
 	}
+	if isCSVPreviewCandidate(rec) {
+		h.getCSVPreviewContent(w, r, rec, limit)
+		return
+	}
+
 	stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
@@ -560,6 +566,87 @@ func (h Handler) getFilePreviewContent(w http.ResponseWriter, r *http.Request) {
 		"sizeBytes":   rec.SizeBytes,
 		"encoding":    "utf-8",
 		"downloadURL": "/api/files/" + rec.ID + "/download",
+	})
+}
+
+func (h Handler) getCSVPreviewContent(w http.ResponseWriter, r *http.Request, rec fileRecord, limit int64) {
+	if limit < 2*1024*1024 {
+		limit = 2 * 1024 * 1024
+	}
+	maxRows := h.previewCSVMaxRows(r)
+	if maxRows <= 0 {
+		maxRows = 500
+	}
+
+	stream, err := h.Storage.GetStream(r.Context(), rec.StorageKey)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file data not found"})
+		return
+	}
+	defer stream.Close()
+
+	data, err := io.ReadAll(io.LimitReader(stream, limit+1))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read csv preview content"})
+		return
+	}
+
+	truncatedByBytes := int64(len(data)) > limit
+	if truncatedByBytes {
+		data = data[:limit]
+	}
+	delimiter := detectCSVDelimiter(data)
+
+	reader := csv.NewReader(strings.NewReader(string(data)))
+	reader.Comma = delimiter
+	reader.FieldsPerRecord = -1
+	reader.LazyQuotes = true
+	reader.TrimLeadingSpace = true
+
+	rows := make([][]string, 0, maxRows)
+	truncatedByRows := false
+	for len(rows) < maxRows {
+		record, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			break
+		}
+		rows = append(rows, record)
+	}
+	if len(rows) >= maxRows {
+		if _, err := reader.Read(); err == nil {
+			truncatedByRows = true
+		}
+	}
+
+	headers := []string{}
+	previewRows := rows
+	if len(rows) > 0 {
+		headers = rows[0]
+		if len(rows) > 1 {
+			previewRows = rows[1:]
+		} else {
+			previewRows = [][]string{}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":         rec.ID,
+		"category":       "csv",
+		"delimiter":      string(delimiter),
+		"headers":        headers,
+		"rows":           previewRows,
+		"rawRows":        rows,
+		"rowCount":       len(rows),
+		"maxRows":        maxRows,
+		"truncated":      truncatedByBytes || truncatedByRows,
+		"sizeBytes":      rec.SizeBytes,
+		"downloadURL":    "/api/files/" + rec.ID + "/download",
+		"encoding":       "utf-8",
+		"truncatedBytes": truncatedByBytes,
+		"truncatedRows":  truncatedByRows,
 	})
 }
 
@@ -853,6 +940,48 @@ func isOfficeLikeExt(ext string) bool {
 	}
 }
 
+func isCSVPreviewCandidate(rec fileRecord) bool {
+	ext := ""
+	if rec.Extension != nil {
+		ext = strings.ToLower(strings.TrimSpace(*rec.Extension))
+	}
+	if ext == "csv" {
+		return true
+	}
+
+	mimeType := ""
+	if rec.MimeType != nil {
+		mimeType = strings.ToLower(strings.TrimSpace(*rec.MimeType))
+	}
+	if strings.Contains(mimeType, "csv") {
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(rec.Name)), ".csv")
+}
+
+func detectCSVDelimiter(data []byte) rune {
+	limit := len(data)
+	if limit > 4096 {
+		limit = 4096
+	}
+	sample := string(data[:limit])
+	line := sample
+	if idx := strings.IndexByte(sample, '\n'); idx >= 0 {
+		line = sample[:idx]
+	}
+	candidates := []rune{',', ';', '\t', '|'}
+	best := ','
+	bestCount := -1
+	for _, c := range candidates {
+		count := strings.Count(line, string(c))
+		if count > bestCount {
+			bestCount = count
+			best = c
+		}
+	}
+	return best
+}
+
 func recommendedPreviewJobTypes(category string) []string {
 	switch category {
 	case "image":
@@ -884,6 +1013,19 @@ func (h Handler) previewTextMaxBytes(r *http.Request) int64 {
 	var val int64
 	if err := json.Unmarshal(raw, &val); err != nil || val <= 0 {
 		return 1 * 1024 * 1024
+	}
+	return val
+}
+
+func (h Handler) previewCSVMaxRows(r *http.Request) int {
+	var raw json.RawMessage
+	err := h.DB.QueryRow(r.Context(), `SELECT value FROM system_settings WHERE key='preview.csv_max_rows'`).Scan(&raw)
+	if err != nil {
+		return 500
+	}
+	var val int
+	if err := json.Unmarshal(raw, &val); err != nil || val <= 0 {
+		return 500
 	}
 	return val
 }

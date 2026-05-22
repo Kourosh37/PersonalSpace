@@ -35,6 +35,7 @@ This phase also includes an initial working file workflow:
 - Preview stream variants via `GET /api/files/:id/preview?variant=thumbnail|pdf|metadata` (when generated)
 - Office-to-PDF conversion via preview worker (`jobType=office_to_pdf`) using bundled LibreOffice
 - Media metadata enrichment for audio/video preview metadata via bundled `ffprobe`
+- CSV table preview support (delimiter detection + bounded row/byte limits)
 
 ## Quick start
 
