@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import { InAppDownloadPanel, useInAppDownloads } from "@/components/in-app-download";
 
 type ShareInfo = {
   id: string;
@@ -48,6 +49,7 @@ export default function PublicSharePage() {
   const [loading, setLoading] = useState(true);
   const [parentId, setParentId] = useState<string | null>(null);
   const currentFolderId = parentId ?? share?.targetId ?? null;
+  const { tasks: downloadTasks, startDownload, cancelDownload, clearFinished } = useInAppDownloads();
 
   const baseQuery = useMemo(() => {
     const q = new URLSearchParams();
@@ -108,6 +110,17 @@ export default function PublicSharePage() {
     }
   }
 
+  function downloadShareFileInApp(fileId: string, fileName: string, sizeBytes?: number) {
+    const suffix = authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : "";
+    void startDownload({
+      id: `${token}-${fileId}`,
+      url: `/api/public/shares/${token}/files/${fileId}/download${suffix}`,
+      filename: fileName,
+      sizeBytes,
+      credentials: "include",
+    });
+  }
+
   if (loading) return <p>Loading share...</p>;
 
   if (error) {
@@ -149,9 +162,14 @@ export default function PublicSharePage() {
             </a>
           ) : null}
           {share.allowDownload ? (
-            <a className="btn-primary" href={`/api/public/shares/${token}/files/${share.targetId}/download${authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : ""}`}>
-              Download
-            </a>
+            <>
+              <button className="btn-primary" onClick={() => downloadShareFileInApp(share.targetId, share.name)} type="button">
+                Download (In-App)
+              </button>
+              <a className="btn-ghost" href={`/api/public/shares/${token}/files/${share.targetId}/download${authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : ""}`}>
+                Download (Browser)
+              </a>
+            </>
           ) : null}
         </section>
       ) : (
@@ -202,9 +220,18 @@ export default function PublicSharePage() {
                             </a>
                           ) : null}
                           {share.allowDownload ? (
-                            <a className="btn-primary !px-2 !py-1 text-xs" href={`/api/public/shares/${token}/files/${item.id}/download${authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : ""}`}>
-                              Download
-                            </a>
+                            <>
+                              <button
+                                className="btn-primary !px-2 !py-1 text-xs"
+                                onClick={() => downloadShareFileInApp(item.id, item.name, item.sizeBytes)}
+                                type="button"
+                              >
+                                Download (In-App)
+                              </button>
+                              <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/public/shares/${token}/files/${item.id}/download${authorizedPassword ? `?password=${encodeURIComponent(authorizedPassword)}` : ""}`}>
+                                Download (Browser)
+                              </a>
+                            </>
                           ) : null}
                         </div>
                       ) : (
@@ -218,6 +245,7 @@ export default function PublicSharePage() {
           </div>
         </section>
       )}
+      <InAppDownloadPanel tasks={downloadTasks} onCancel={cancelDownload} onClearFinished={clearFinished} />
     </div>
   );
 }

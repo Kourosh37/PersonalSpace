@@ -4,9 +4,6 @@ This file tracks all remaining work needed to make the project fully production-
 
 ## 1) Product feature gaps
 
-- [ ] Add optional in-app download progress mode.
-Details: `fetch/streams` mode with progress/speed/ETA where feasible, while keeping native browser download for large files.
-
 - [ ] Finalize upload UX parity with the original spec.
 Details: Confirm/support queue states (`queued`, `preparing`, `uploading`, `paused`, `retrying`, `completed`, `failed`, `canceled`), resume-after-refresh behavior, network recovery behavior, and bulk controls (`pause all`, `resume all`, `cancel all`) where technically possible.
 

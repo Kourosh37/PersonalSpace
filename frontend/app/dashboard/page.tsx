@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { TusUploader } from "@/components/tus-uploader";
+import { InAppDownloadPanel, useInAppDownloads } from "@/components/in-app-download";
 
 type MeResponse = {
   user: {
@@ -94,6 +95,7 @@ export default function DashboardPage() {
   const [previewFileName, setPreviewFileName] = useState<string | null>(null);
   const [previewInfo, setPreviewInfo] = useState<FilePreviewInfoResponse | null>(null);
   const [previewJobs, setPreviewJobs] = useState<FilePreviewJobsResponse | null>(null);
+  const { tasks: downloadTasks, startDownload, cancelDownload, clearFinished } = useInAppDownloads();
 
   useEffect(() => {
     let mounted = true;
@@ -382,6 +384,17 @@ export default function DashboardPage() {
     }
   }
 
+  function downloadFileInApp(item: BrowserItem) {
+    if (item.type !== "file") return;
+    void startDownload({
+      id: item.id,
+      url: `/api/files/${item.id}/download`,
+      filename: item.name,
+      sizeBytes: item.sizeBytes,
+      credentials: "include",
+    });
+  }
+
   if (loadingSession) {
     return <p>Loading session...</p>;
   }
@@ -511,8 +524,11 @@ export default function DashboardPage() {
                             <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${item.id}/preview`} rel="noreferrer" target="_blank">
                               Preview
                             </a>
+                            <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => downloadFileInApp(item)} type="button">
+                              Download (In-App)
+                            </button>
                             <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${item.id}/download`}>
-                              Download
+                              Download (Browser)
                             </a>
                             <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => void loadPreviewDiagnostics(item)} type="button">
                               Preview Jobs
@@ -605,6 +621,7 @@ export default function DashboardPage() {
           </div>
         ) : null}
       </section>
+      <InAppDownloadPanel tasks={downloadTasks} onCancel={cancelDownload} onClearFinished={clearFinished} />
     </div>
   );
 }
