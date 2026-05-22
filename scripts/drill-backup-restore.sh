@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "$0")/lib/compose.sh"
+
 if [[ ! -f ".env" ]]; then
   echo ".env is required for the backup/restore drill."
   exit 1
@@ -21,26 +23,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-storage_volume_name() {
-  local app_container_id
-  app_container_id="$(docker compose ps -q app)"
-  if [[ -z "$app_container_id" ]]; then
-    echo "App container is not running." >&2
-    return 1
-  fi
-
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/storage"}}{{.Name}}{{end}}{{end}}' "$app_container_id"
-}
-
 echo "Starting isolated drill stack: ${COMPOSE_PROJECT_NAME}"
-docker compose up -d postgres app >/dev/null
-docker compose run --rm app /app/bin/migrate up >/dev/null
+docker compose up -d postgres >/dev/null
+wait_for_postgres
 
 storage_volume="$(storage_volume_name)"
-if [[ -z "$storage_volume" ]]; then
-  echo "Could not detect drill storage volume."
-  exit 1
-fi
+ensure_storage_volume "$storage_volume"
+
+echo "Applying migrations in drill database."
+for migration in backend/migrations/*.sql; do
+  docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}" < "$migration" >/dev/null
+done
 
 echo "Creating drill marker data."
 docker compose exec -T postgres psql -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}" >/dev/null <<SQL
@@ -55,7 +48,7 @@ SQL
 
 docker run --rm \
   -v "${storage_volume}:/volume" \
-  alpine:3.20 \
+  postgres:16-alpine \
   sh -c "mkdir -p /volume/drill && printf '%s' '${marker_body}' > /volume/drill/marker.txt"
 
 echo "Running backup."
@@ -74,7 +67,7 @@ DELETE FROM disaster_recovery_drill;
 SQL
 docker run --rm \
   -v "${storage_volume}:/volume" \
-  alpine:3.20 \
+  postgres:16-alpine \
   sh -c "rm -f /volume/drill/marker.txt"
 
 echo "Running restore."
@@ -94,7 +87,7 @@ echo "Verifying restored storage marker."
 restored_storage_marker="$(
   docker run --rm \
     -v "${storage_volume}:/volume:ro" \
-    alpine:3.20 \
+    postgres:16-alpine \
     sh -c "cat /volume/drill/marker.txt"
 )"
 if [[ "$restored_storage_marker" != "$marker_body" ]]; then

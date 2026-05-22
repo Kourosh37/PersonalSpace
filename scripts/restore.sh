@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "$0")/lib/compose.sh"
+
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "Usage: ./scripts/restore.sh <backup_dir> [--force]"
   exit 1
@@ -31,28 +33,18 @@ if [[ "$force_flag" != "--force" ]]; then
   exit 1
 fi
 
-docker compose up -d postgres app >/dev/null
+docker compose up -d postgres >/dev/null
+wait_for_postgres
 
-app_container_id="$(docker compose ps -q app)"
-if [[ -z "$app_container_id" ]]; then
-  echo "App container is not running."
-  exit 1
-fi
+storage_volume="$(storage_volume_name)"
+ensure_storage_volume "$storage_volume"
 
-storage_volume="$(
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/storage"}}{{.Name}}{{end}}{{end}}' "$app_container_id"
-)"
-if [[ -z "$storage_volume" ]]; then
-  echo "Could not detect storage volume name from app container."
-  exit 1
-fi
-
-cat "$db_file" | docker compose exec -T postgres psql -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}"
+cat "$db_file" | docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}"
 
 docker run --rm \
   -v "${storage_volume}:/volume" \
   -v "$(pwd)/${backup_dir}:/backup:ro" \
-  alpine:3.20 \
+  postgres:16-alpine \
   sh -c 'find /volume -mindepth 1 -delete && tar xzf /backup/storage.tar.gz -C /volume'
 
 echo "Restore completed from: ${backup_dir}"

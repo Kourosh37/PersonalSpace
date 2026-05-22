@@ -1,23 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(dirname "$0")/lib/compose.sh"
+
 mkdir -p backups
 
-docker compose up -d postgres app >/dev/null
+docker compose up -d postgres >/dev/null
+wait_for_postgres
 
-app_container_id="$(docker compose ps -q app)"
-if [[ -z "$app_container_id" ]]; then
-  echo "App container is not running."
-  exit 1
-fi
-
-storage_volume="$(
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/storage"}}{{.Name}}{{end}}{{end}}' "$app_container_id"
-)"
-if [[ -z "$storage_volume" ]]; then
-  echo "Could not detect storage volume name from app container."
-  exit 1
-fi
+storage_volume="$(storage_volume_name)"
+ensure_storage_volume "$storage_volume"
 
 ts="$(date +%Y%m%d-%H%M%S)"
 backup_dir="backups/space-backup-${ts}"
@@ -26,12 +18,12 @@ mkdir -p "$backup_dir"
 db_file="${backup_dir}/db.sql"
 storage_file="${backup_dir}/storage.tar.gz"
 
-docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}" > "$db_file"
+docker compose exec -T postgres pg_dump --clean --if-exists -U "${POSTGRES_USER:-space}" "${POSTGRES_DB:-space}" > "$db_file"
 
 docker run --rm \
   -v "${storage_volume}:/volume:ro" \
   -v "$(pwd)/${backup_dir}:/backup" \
-  alpine:3.20 \
+  postgres:16-alpine \
   sh -c 'tar czf /backup/storage.tar.gz -C /volume .'
 
 cat > "${backup_dir}/manifest.txt" <<EOF
