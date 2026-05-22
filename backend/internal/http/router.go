@@ -33,6 +33,7 @@ func (h Handler) Router() http.Handler {
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.RequestID)
+	r.Use(middleware.StructuredRequestLogger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(middleware.SecurityHeaders)
 	csrfMW := middleware.NewCSRFMiddleware(h.Cfg.CSRFDisabled, h.Cfg.SessionCookieName, h.Cfg.PublicBaseURL, h.Cfg.AllowedOrigins)

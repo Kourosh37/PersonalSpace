@@ -12,11 +12,14 @@ import (
 
 	"space/backend/internal/config"
 	"space/backend/internal/db"
+	"space/backend/internal/logging"
 	"space/backend/internal/preview"
 	"space/backend/internal/storage"
 )
 
 func main() {
+	logging.Configure("space-preview-worker")
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "error", err)

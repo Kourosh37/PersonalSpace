@@ -3,19 +3,21 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"space/backend/internal/auth"
+	"space/backend/internal/logging"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
+	logging.Configure("space-create-admin")
+
 	var username string
 	var password string
 	flag.StringVar(&username, "username", "", "admin username")
@@ -24,32 +26,38 @@ func main() {
 
 	username = strings.TrimSpace(username)
 	if username == "" || password == "" {
-		log.Fatal("username and password are required")
+		slog.Error("username and password are required")
+		os.Exit(1)
 	}
 
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		log.Fatal("DB_DSN is required")
+		slog.Error("DB_DSN is required")
+		os.Exit(1)
 	}
 
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		log.Fatalf("hash password: %v", err)
+		slog.Error("hash password", "error", err)
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		log.Fatalf("connect db: %v", err)
+		slog.Error("connect db", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
 	var exists bool
 	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)`, username).Scan(&exists); err != nil {
-		log.Fatalf("query user existence: %v", err)
+		slog.Error("query user existence", "error", err)
+		os.Exit(1)
 	}
 	if exists {
-		log.Fatalf("user already exists: %s", username)
+		slog.Error("user already exists", "username", username)
+		os.Exit(1)
 	}
 
 	id := uuid.NewString()
@@ -59,8 +67,9 @@ func main() {
 		VALUES ($1,$2,$3,'admin',true,0,$4,$5)
 	`, id, username, hash, now, now)
 	if err != nil {
-		log.Fatalf("insert user: %v", err)
+		slog.Error("insert user", "error", err)
+		os.Exit(1)
 	}
 
-	fmt.Printf("Admin user created: %s\n", username)
+	slog.Info("admin user created", "username", username, "user_id", id)
 }

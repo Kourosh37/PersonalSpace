@@ -5,37 +5,45 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"space/backend/internal/logging"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
+	logging.Configure("space-migrate")
+
 	if len(os.Args) < 2 || os.Args[1] != "up" {
-		log.Fatal("usage: migrate up")
+		slog.Error("usage: migrate up")
+		os.Exit(1)
 	}
 
 	dsn := os.Getenv("DB_DSN")
 	if dsn == "" {
-		log.Fatal("DB_DSN is required")
+		slog.Error("DB_DSN is required")
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		log.Fatalf("connect db: %v", err)
+		slog.Error("connect db", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
 	if err := runMigrations(ctx, pool, "/app/migrations"); err != nil {
-		log.Fatalf("run migrations: %v", err)
+		slog.Error("run migrations", "error", err)
+		os.Exit(1)
 	}
 
-	log.Println("migrations applied")
+	slog.Info("migrations applied")
 }
 
 func runMigrations(ctx context.Context, pool *pgxpool.Pool, dir string) error {
@@ -97,7 +105,7 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool, dir string) error {
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
-		log.Printf("applied migration: %s", version)
+		slog.Info("applied migration", "version", version)
 	}
 
 	if len(entries) == 0 {

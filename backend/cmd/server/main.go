@@ -15,12 +15,15 @@ import (
 	"space/backend/internal/config"
 	"space/backend/internal/db"
 	httpapi "space/backend/internal/http"
+	"space/backend/internal/logging"
 	"space/backend/internal/maintenance"
 	"space/backend/internal/security"
 	"space/backend/internal/storage"
 )
 
 func main() {
+	logging.Configure("space-server")
+
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("load config", "error", err)
