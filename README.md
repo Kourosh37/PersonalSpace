@@ -36,6 +36,7 @@ This phase also includes an initial working file workflow:
 - Office-to-PDF conversion via preview worker (`jobType=office_to_pdf`) using bundled LibreOffice
 - Media metadata enrichment for audio/video preview metadata via bundled `ffprobe`
 - CSV table preview support (delimiter detection + bounded row/byte limits)
+- Dashboard preview diagnostics panel with one-click preview job queueing and job status visibility
 
 ## Quick start
 

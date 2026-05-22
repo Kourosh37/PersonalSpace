@@ -29,6 +29,28 @@ type ListItemsResponse = {
   items: BrowserItem[];
 };
 
+type FilePreviewInfoResponse = {
+  fileId: string;
+  category: string;
+  method: string;
+  supported: boolean;
+  needsGeneration?: boolean;
+  recommendedJobTypes?: string[];
+  reason?: string;
+};
+
+type FilePreviewJobsResponse = {
+  fileId: string;
+  jobs: Array<{
+    id: string;
+    jobType: string;
+    status: string;
+    attempts: number;
+    errorMessage?: string;
+    updatedAt: string;
+  }>;
+};
+
 type Crumb = {
   id: string | null;
   name: string;
@@ -68,6 +90,10 @@ export default function DashboardPage() {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [shareURL, setShareURL] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewFileName, setPreviewFileName] = useState<string | null>(null);
+  const [previewInfo, setPreviewInfo] = useState<FilePreviewInfoResponse | null>(null);
+  const [previewJobs, setPreviewJobs] = useState<FilePreviewJobsResponse | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -302,6 +328,60 @@ export default function DashboardPage() {
     }
   }
 
+  async function loadPreviewDiagnostics(item: BrowserItem) {
+    if (item.type !== "file") return;
+    setPreviewLoading(true);
+    setPreviewInfo(null);
+    setPreviewJobs(null);
+    setPreviewFileName(item.name);
+    setItemsError(null);
+    try {
+      const [infoRes, jobsRes] = await Promise.all([
+        fetch(`/api/files/${item.id}/preview-info`, { credentials: "include" }),
+        fetch(`/api/files/${item.id}/preview-jobs`, { credentials: "include" }),
+      ]);
+
+      const infoData = await infoRes.json().catch(() => ({}));
+      const jobsData = await jobsRes.json().catch(() => ({}));
+      if (!infoRes.ok) {
+        throw new Error(infoData?.error ?? "Failed to load preview info");
+      }
+      if (!jobsRes.ok) {
+        throw new Error(jobsData?.error ?? "Failed to load preview jobs");
+      }
+
+      setPreviewInfo(infoData as FilePreviewInfoResponse);
+      setPreviewJobs(jobsData as FilePreviewJobsResponse);
+    } catch (err) {
+      setItemsError(err instanceof Error ? err.message : "Failed to load preview diagnostics");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function enqueuePreviewJob(fileId: string, jobType: string) {
+    setItemsError(null);
+    try {
+      const response = await fetch(`/api/files/${fileId}/preview-jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ jobType }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Failed to enqueue preview job");
+      }
+
+      const item = items.find((it) => it.id === fileId && it.type === "file");
+      if (item) {
+        await loadPreviewDiagnostics(item);
+      }
+    } catch (err) {
+      setItemsError(err instanceof Error ? err.message : "Failed to enqueue preview job");
+    }
+  }
+
   if (loadingSession) {
     return <p>Loading session...</p>;
   }
@@ -434,6 +514,9 @@ export default function DashboardPage() {
                             <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${item.id}/download`}>
                               Download
                             </a>
+                            <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => void loadPreviewDiagnostics(item)} type="button">
+                              Preview Jobs
+                            </button>
                             <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => deleteFile(item)} type="button">
                               Delete
                             </button>
@@ -459,6 +542,68 @@ export default function DashboardPage() {
             </tbody>
           </table>
         </div>
+
+        {previewLoading ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+            Loading preview diagnostics...
+          </div>
+        ) : null}
+
+        {previewInfo ? (
+          <div className="mt-4 rounded-xl border border-slate-200 p-4 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium">Preview diagnostics: {previewFileName ?? previewInfo.fileId}</p>
+              <div className="flex flex-wrap gap-2">
+                {(previewInfo.recommendedJobTypes ?? []).map((jobType) => (
+                  <button
+                    className="btn-ghost !px-2 !py-1 text-xs"
+                    key={jobType}
+                    onClick={() => void enqueuePreviewJob(previewInfo.fileId, jobType)}
+                    type="button"
+                  >
+                    Queue {jobType}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <p className="mt-2 text-slate-600">
+              category: {previewInfo.category} | supported: {String(previewInfo.supported)} | needsGeneration:{" "}
+              {String(previewInfo.needsGeneration)}
+            </p>
+            {previewInfo.reason ? <p className="mt-1 text-amber-700">{previewInfo.reason}</p> : null}
+
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${previewInfo.fileId}/preview`} rel="noreferrer" target="_blank">
+                Open default preview
+              </a>
+              <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${previewInfo.fileId}/preview?variant=thumbnail`} rel="noreferrer" target="_blank">
+                Open thumbnail variant
+              </a>
+              <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${previewInfo.fileId}/preview?variant=pdf`} rel="noreferrer" target="_blank">
+                Open PDF variant
+              </a>
+              <a className="btn-ghost !px-2 !py-1 text-xs" href={`/api/files/${previewInfo.fileId}/preview-content`} rel="noreferrer" target="_blank">
+                Open preview-content
+              </a>
+            </div>
+
+            <div className="mt-3">
+              <p className="font-medium">Recent jobs</p>
+              {previewJobs && previewJobs.jobs.length > 0 ? (
+                <ul className="mt-1 space-y-1 text-xs text-slate-700">
+                  {previewJobs.jobs.slice(0, 8).map((job) => (
+                    <li key={job.id}>
+                      {job.jobType} | {job.status} | attempts={job.attempts} | {new Date(job.updatedAt).toLocaleString()}
+                      {job.errorMessage ? ` | ${job.errorMessage}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">No preview jobs yet.</p>
+              )}
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );
