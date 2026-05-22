@@ -5,10 +5,10 @@ Self-hosted private file manager foundation with Docker-first deployment.
 ## Current status
 
 This is phase 1 implementation (foundation):
-- Dockerized stack (`caddy`, `frontend`, `backend`, `postgres`, `redis`)
+- Dockerized stack (`app`, `preview-worker`, `postgres`, `redis`)
 - Go backend with secure auth/session foundation
 - Admin upload settings endpoints with DB persistence
-- Next.js frontend with login, dashboard shell, admin upload settings page
+- Next.js frontend with login, dashboard shell, admin pages
 - Initial PostgreSQL migrations
 - Offline image build/export/import scripts
 
@@ -29,6 +29,7 @@ This phase also includes an initial working file workflow:
 - Security headers middleware (`HSTS` behind HTTPS, `X-Frame-Options`, `nosniff`, `Permissions-Policy`)
 - CSRF protection for state-changing API requests using Origin/Referer validation
 - Background maintenance loop for expired sessions and expired upload cleanup
+- Async preview worker queue for metadata previews (`preview_jobs` -> `file_previews`)
 
 ## Quick start
 
@@ -58,8 +59,14 @@ cp .env.example .env
 
 5. Open app:
 
-- `http://localhost`
+- `http://localhost:${SPACE_APP_PORT:-3000}`
 - Login with created admin credentials
+
+## Reverse proxy note
+
+- This project does **not** require Caddy/Nginx inside its own compose.
+- Route your existing external reverse proxy to the `app` service (port `3000`).
+- API routes are proxied internally by Next.js to the embedded backend service, so external proxy only needs one upstream.
 
 ## Scripts
 
@@ -85,6 +92,6 @@ See:
 
 - This phase initializes production-minded structure and core modules.
 - Dashboard includes Uppy Tus-based resumable upload panel.
-- Office/media preview workers and additional advanced admin settings remain next.
+- Office-to-PDF/media thumbnail preview generation is still a next phase.
 - `backup.sh` now creates a full backup directory containing PostgreSQL dump plus storage volume archive.
 - `restore.sh <backup_dir> --force` restores both DB and storage data.

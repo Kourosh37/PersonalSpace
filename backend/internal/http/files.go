@@ -40,6 +40,7 @@ func (h Handler) registerFileRoutes(api chi.Router, authMW middleware.AuthMiddle
 	api.With(authMW.RequireAuth).Get("/files/{id}/preview-info", h.getFilePreviewInfo)
 	api.With(authMW.RequireAuth).Get("/files/{id}/preview-content", h.getFilePreviewContent)
 	api.With(authMW.RequireAuth).Post("/files/{id}/preview-jobs", h.createFilePreviewJob)
+	api.With(authMW.RequireAuth).Get("/files/{id}/preview-jobs", h.listFilePreviewJobs)
 	api.With(authMW.RequireAuth).Get("/files/{id}/download", h.downloadFile)
 	api.With(authMW.RequireAuth).Get("/files/{id}/preview", h.previewFile)
 	api.With(authMW.RequireAuth).Patch("/files/{id}", h.renameFile)
@@ -451,18 +452,177 @@ func (h Handler) createFilePreviewJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	type createPreviewJobRequest struct {
+		JobType string `json:"jobType"`
+	}
+	var req createPreviewJobRequest
+	if strings.TrimSpace(r.Header.Get("Content-Type")) != "" {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	jobType := strings.ToLower(strings.TrimSpace(req.JobType))
+	if jobType == "" {
+		jobType = "metadata"
+	}
+	if jobType != "metadata" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview job type"})
+		return
+	}
+
+	var existingJobID string
+	var existingStatus string
+	err = h.DB.QueryRow(r.Context(), `
+		SELECT id, status
+		FROM preview_jobs
+		WHERE file_id=$1 AND job_type=$2 AND status IN ('queued','processing')
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, rec.ID, jobType).Scan(&existingJobID, &existingStatus)
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"jobId":         existingJobID,
+			"status":        existingStatus,
+			"alreadyQueued": true,
+			"jobType":       jobType,
+		})
+		return
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not check existing preview jobs"})
+		return
+	}
+
 	jobID := uuid.NewString()
 	_, err = h.DB.Exec(r.Context(), `
 		INSERT INTO preview_jobs (id, file_id, job_type, status, output_storage_key, error_message, attempts, created_at, updated_at)
-		VALUES ($1,$2,'metadata','queued',NULL,NULL,0,now(),now())
-	`, jobID, rec.ID)
+		VALUES ($1,$2,$3,'queued',NULL,NULL,0,now(),now())
+	`, jobID, rec.ID, jobType)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not enqueue preview job"})
 		return
 	}
 
-	h.insertAudit(r.Context(), &user.ID, "preview.job.created", "preview_job", &jobID, clientIP(r), r.UserAgent(), map[string]any{"fileId": rec.ID})
-	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "status": "queued"})
+	h.insertAudit(r.Context(), &user.ID, "preview.job.created", "preview_job", &jobID, clientIP(r), r.UserAgent(), map[string]any{"fileId": rec.ID, "jobType": jobType})
+	writeJSON(w, http.StatusAccepted, map[string]any{"jobId": jobID, "status": "queued", "jobType": jobType})
+}
+
+func (h Handler) listFilePreviewJobs(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.CurrentUser(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+		return
+	}
+
+	fileID := chi.URLParam(r, "id")
+	if _, err := uuid.Parse(fileID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid file id"})
+		return
+	}
+
+	rec, err := h.fetchOwnedFile(r.Context(), user.ID, fileID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT id, job_type, status, output_storage_key, error_message, attempts, created_at, updated_at
+		FROM preview_jobs
+		WHERE file_id=$1
+		ORDER BY created_at DESC
+		LIMIT 50
+	`, rec.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list preview jobs"})
+		return
+	}
+	defer rows.Close()
+
+	jobs := make([]map[string]any, 0, 16)
+	for rows.Next() {
+		var id string
+		var jobType string
+		var status string
+		var outputKey *string
+		var errorMessage *string
+		var attempts int
+		var createdAt time.Time
+		var updatedAt time.Time
+
+		if err := rows.Scan(&id, &jobType, &status, &outputKey, &errorMessage, &attempts, &createdAt, &updatedAt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not scan preview jobs"})
+			return
+		}
+
+		jobs = append(jobs, map[string]any{
+			"id":             id,
+			"jobType":        jobType,
+			"status":         status,
+			"outputStorageKey": outputKey,
+			"errorMessage":   errorMessage,
+			"attempts":       attempts,
+			"createdAt":      createdAt,
+			"updatedAt":      updatedAt,
+		})
+	}
+	if rows.Err() != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read preview jobs"})
+		return
+	}
+
+	previewRows, err := h.DB.Query(r.Context(), `
+		SELECT id, preview_type, storage_key, mime_type, size_bytes, status, created_at, updated_at
+		FROM file_previews
+		WHERE file_id=$1
+		ORDER BY created_at DESC
+	`, rec.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not list file previews"})
+		return
+	}
+	defer previewRows.Close()
+
+	previews := make([]map[string]any, 0, 8)
+	for previewRows.Next() {
+		var id string
+		var previewType string
+		var storageKey *string
+		var mimeType *string
+		var sizeBytes *int64
+		var status string
+		var createdAt time.Time
+		var updatedAt time.Time
+
+		if err := previewRows.Scan(&id, &previewType, &storageKey, &mimeType, &sizeBytes, &status, &createdAt, &updatedAt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not scan file previews"})
+			return
+		}
+
+		previews = append(previews, map[string]any{
+			"id":         id,
+			"type":       previewType,
+			"storageKey": storageKey,
+			"mimeType":   mimeType,
+			"sizeBytes":  sizeBytes,
+			"status":     status,
+			"createdAt":  createdAt,
+			"updatedAt":  updatedAt,
+		})
+	}
+	if previewRows.Err() != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not read file previews"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"fileId":   rec.ID,
+		"jobs":     jobs,
+		"previews": previews,
+	})
 }
 
 func detectPreviewMode(rec fileRecord) (category string, method string, supported bool) {

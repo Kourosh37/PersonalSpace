@@ -1,32 +1,8 @@
 services:
-  caddy:
-    image: caddy:2.9-alpine
-    depends_on:
-      - frontend
-      - backend
-    ports:
-      - "80:80"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-    restart: unless-stopped
-
-  frontend:
-    image: space-frontend:latest
+  app:
+    image: space-app:latest
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    env_file:
-      - .env
-    environment:
-      - NEXT_PUBLIC_API_BASE=/api
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  backend:
-    image: space-backend:latest
-    build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     env_file:
       - .env
@@ -39,14 +15,49 @@ services:
       - BACKEND_SESSION_COOKIE_NAME=${BACKEND_SESSION_COOKIE_NAME}
       - BACKEND_SESSION_TTL_HOURS=${BACKEND_SESSION_TTL_HOURS}
       - BACKEND_SESSION_SECURE=${BACKEND_SESSION_SECURE}
+      - BACKEND_CSRF_DISABLED=${BACKEND_CSRF_DISABLED}
       - BACKEND_STORAGE_ROOT=${BACKEND_STORAGE_ROOT}
+      - BACKEND_ALLOWED_ORIGINS=${BACKEND_ALLOWED_ORIGINS:-}
+      - SECURITY_LOGIN_RATE_LIMIT_PER_MINUTE=${SECURITY_LOGIN_RATE_LIMIT_PER_MINUTE:-15}
+      - SECURITY_SHARE_PASSWORD_RATE_LIMIT_PER_MINUTE=${SECURITY_SHARE_PASSWORD_RATE_LIMIT_PER_MINUTE:-20}
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
     volumes:
       - space_storage:/data/storage
+    ports:
+      - "${SPACE_APP_PORT:-3000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O - http://127.0.0.1:3000/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 4s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  preview-worker:
+    image: space-app:latest
+    entrypoint: ["/app/bin/preview-worker"]
+    env_file:
+      - .env
+    environment:
+      - DB_DSN=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
+      - APP_NAME=${APP_NAME}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL}
+      - BACKEND_STORAGE_ROOT=${BACKEND_STORAGE_ROOT}
+      - PREVIEW_WORKER_POLL_INTERVAL_SECONDS=${PREVIEW_WORKER_POLL_INTERVAL_SECONDS:-3}
+      - PREVIEW_WORKER_MAX_ATTEMPTS=${PREVIEW_WORKER_MAX_ATTEMPTS:-3}
+    volumes:
+      - space_storage:/data/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      app:
+        condition: service_started
     restart: unless-stopped
 
   postgres:

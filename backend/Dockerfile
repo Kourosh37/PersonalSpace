@@ -6,6 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/migrate ./cmd/migrate
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/create-admin ./cmd/create-admin
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/preview-worker ./cmd/preview-worker
 
 FROM alpine:3.20
 RUN adduser -D -g '' app
@@ -13,6 +14,7 @@ WORKDIR /app
 COPY --from=builder /out/server /app/server
 COPY --from=builder /out/migrate /app/migrate
 COPY --from=builder /out/create-admin /app/create-admin
+COPY --from=builder /out/preview-worker /app/preview-worker
 COPY migrations /app/migrations
 RUN mkdir -p /data/storage && chown -R app:app /data /app
 USER app

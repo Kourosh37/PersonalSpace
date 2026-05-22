@@ -6,4 +6,4 @@ if [[ $# -ne 2 ]]; then
   exit 1
 fi
 
-docker compose run --rm backend /app/create-admin --username "$1" --password "$2"
+docker compose run --rm app /app/bin/create-admin --username "$1" --password "$2"

@@ -10,7 +10,7 @@
 Bundle these files/directories for transfer:
 - `docker-compose.yml`
 - `docker-compose.prod.yml`
-- `Caddyfile`
+- `Caddyfile` (optional, only if you want a dedicated proxy for this project)
 - `.env` (or `.env.example` then create `.env` on target)
 - `scripts/`
 - `backend/migrations/`
@@ -28,6 +28,10 @@ Bundle these files/directories for transfer:
 ```
 
 No internet image pulls are required after import.
+
+If you already have a reverse proxy on the server, point it to:
+- `space app container` on port `3000` (or your configured `SPACE_APP_PORT` on host)
+- No Caddy container inside this project is required.
 
 ## Backup and restore
 

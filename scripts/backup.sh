@@ -3,19 +3,19 @@ set -euo pipefail
 
 mkdir -p backups
 
-docker compose up -d postgres backend >/dev/null
+docker compose up -d postgres app >/dev/null
 
-backend_container_id="$(docker compose ps -q backend)"
-if [[ -z "$backend_container_id" ]]; then
-  echo "Backend container is not running."
+app_container_id="$(docker compose ps -q app)"
+if [[ -z "$app_container_id" ]]; then
+  echo "App container is not running."
   exit 1
 fi
 
 storage_volume="$(
-  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/storage"}}{{.Name}}{{end}}{{end}}' "$backend_container_id"
+  docker inspect -f '{{range .Mounts}}{{if eq .Destination "/data/storage"}}{{.Name}}{{end}}{{end}}' "$app_container_id"
 )"
 if [[ -z "$storage_volume" ]]; then
-  echo "Could not detect storage volume name from backend container."
+  echo "Could not detect storage volume name from app container."
   exit 1
 fi
 

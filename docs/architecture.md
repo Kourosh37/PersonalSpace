@@ -2,11 +2,14 @@
 
 ## Services
 
-- `caddy`: reverse proxy and single entrypoint.
-- `frontend`: Next.js App Router UI.
-- `backend`: Go API server (Chi + pgx + Argon2id).
+- `app`: single Space application image (Next.js frontend + Go backend in one container).
+- `preview-worker`: asynchronous preview processor (same image, different entrypoint).
 - `postgres`: primary datastore.
-- `redis`: reserved for rate-limit/background usage.
+- `redis`: rate limiting and background coordination support.
+
+Notes:
+- External reverse proxy (existing Caddy/Nginx/Traefik) should point only to `app:3000`.
+- Next.js rewrites `/api/*` and `/healthz` to backend at `127.0.0.1:8080` inside the same container.
 
 ## Backend modules
 

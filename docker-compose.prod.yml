@@ -1,11 +1,8 @@
 services:
-  caddy:
+  app:
     restart: always
 
-  frontend:
-    restart: always
-
-  backend:
+  preview-worker:
     restart: always
 
   postgres:

@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-docker compose run --rm backend /app/migrate up
+docker compose run --rm app /app/bin/migrate up
