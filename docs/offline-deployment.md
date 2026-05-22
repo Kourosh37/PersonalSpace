@@ -9,8 +9,6 @@
 
 Bundle these files/directories for transfer:
 - `docker-compose.yml`
-- `docker-compose.prod.yml`
-- `Caddyfile` (optional, only if you want a dedicated proxy for this project)
 - `.env` (or `.env.example` then create `.env` on target)
 - `scripts/`
 - `backend/migrations/`
