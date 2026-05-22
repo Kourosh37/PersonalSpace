@@ -33,6 +33,7 @@ This phase also includes an initial working file workflow:
 - Async preview worker queue for metadata previews (`preview_jobs` -> `file_previews`)
 - Async thumbnail preview generation for image files (`jobType=thumbnail`)
 - Preview stream variants via `GET /api/files/:id/preview?variant=thumbnail|pdf|metadata` (when generated)
+- Office-to-PDF conversion via preview worker (`jobType=office_to_pdf`) using bundled LibreOffice
 
 ## Quick start
 
@@ -95,6 +96,6 @@ See:
 
 - This phase initializes production-minded structure and core modules.
 - Dashboard includes Uppy Tus-based resumable upload panel.
-- Office-to-PDF conversion remains a next phase (job type is recognized, but conversion tooling is not bundled yet).
+- `space-app` image now bundles `LibreOffice` and `ffmpeg` so host installation is not required for preview tooling.
 - `backup.sh` now creates a full backup directory containing PostgreSQL dump plus storage volume archive.
 - `restore.sh <backup_dir> --force` restores both DB and storage data.

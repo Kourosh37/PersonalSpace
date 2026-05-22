@@ -368,15 +368,6 @@ func (h Handler) getFileMetadata(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
 		return
 	}
-	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
-	if cfgErr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
-		return
-	}
-	if !previewCfg.Enabled {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview generation is disabled by admin settings"})
-		return
-	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":           rec.ID,
@@ -425,7 +416,15 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	previewItems := make([]map[string]any, 0, len(previews))
+	var hasReadyThumbnail bool
+	var hasReadyPDF bool
 	for _, p := range previews {
+		if p.Status == "ready" && p.Type == "thumbnail" {
+			hasReadyThumbnail = true
+		}
+		if p.Status == "ready" && p.Type == "pdf" {
+			hasReadyPDF = true
+		}
 		previewItems = append(previewItems, map[string]any{
 			"id":         p.ID,
 			"type":       p.Type,
@@ -444,39 +443,45 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 			reason = "preview is disabled by admin settings"
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"fileId":            rec.ID,
-			"name":              rec.Name,
-			"mimeType":          rec.MimeType,
-			"sizeBytes":         rec.SizeBytes,
-			"category":          category,
-			"method":            method,
-			"supported":         supported,
-			"textMaxBytes":      h.previewTextMaxBytes(r),
-			"streamPreviewURL":  "/api/files/" + rec.ID + "/preview",
-			"textPreviewURL":    "/api/files/" + rec.ID + "/preview-content",
-			"thumbnailURL":      "/api/files/" + rec.ID + "/preview?variant=thumbnail",
-			"pdfPreviewURL":     "/api/files/" + rec.ID + "/preview?variant=pdf",
-			"generatedPreviews": previewItems,
-			"reason":            reason,
+			"fileId":              rec.ID,
+			"name":                rec.Name,
+			"mimeType":            rec.MimeType,
+			"sizeBytes":           rec.SizeBytes,
+			"category":            category,
+			"method":              method,
+			"supported":           supported,
+			"textMaxBytes":        h.previewTextMaxBytes(r),
+			"streamPreviewURL":    "/api/files/" + rec.ID + "/preview",
+			"textPreviewURL":      "/api/files/" + rec.ID + "/preview-content",
+			"thumbnailURL":        "/api/files/" + rec.ID + "/preview?variant=thumbnail",
+			"pdfPreviewURL":       "/api/files/" + rec.ID + "/preview?variant=pdf",
+			"generatedPreviews":   previewItems,
+			"thumbnailReady":      hasReadyThumbnail,
+			"pdfReady":            hasReadyPDF,
+			"recommendedJobTypes": recommendedPreviewJobTypes(category),
+			"reason":              reason,
 		})
 		return
 	}
 
 	textMaxBytes := h.previewTextMaxBytes(r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"fileId":            rec.ID,
-		"name":              rec.Name,
-		"mimeType":          rec.MimeType,
-		"sizeBytes":         rec.SizeBytes,
-		"category":          category,
-		"method":            method,
-		"supported":         supported,
-		"textMaxBytes":      textMaxBytes,
-		"streamPreviewURL":  "/api/files/" + rec.ID + "/preview",
-		"textPreviewURL":    "/api/files/" + rec.ID + "/preview-content",
-		"thumbnailURL":      "/api/files/" + rec.ID + "/preview?variant=thumbnail",
-		"pdfPreviewURL":     "/api/files/" + rec.ID + "/preview?variant=pdf",
-		"generatedPreviews": previewItems,
+		"fileId":              rec.ID,
+		"name":                rec.Name,
+		"mimeType":            rec.MimeType,
+		"sizeBytes":           rec.SizeBytes,
+		"category":            category,
+		"method":              method,
+		"supported":           supported,
+		"textMaxBytes":        textMaxBytes,
+		"streamPreviewURL":    "/api/files/" + rec.ID + "/preview",
+		"textPreviewURL":      "/api/files/" + rec.ID + "/preview-content",
+		"thumbnailURL":        "/api/files/" + rec.ID + "/preview?variant=thumbnail",
+		"pdfPreviewURL":       "/api/files/" + rec.ID + "/preview?variant=pdf",
+		"generatedPreviews":   previewItems,
+		"thumbnailReady":      hasReadyThumbnail,
+		"pdfReady":            hasReadyPDF,
+		"recommendedJobTypes": recommendedPreviewJobTypes(category),
 	})
 }
 
@@ -842,6 +847,17 @@ func isOfficeLikeExt(ext string) bool {
 	}
 }
 
+func recommendedPreviewJobTypes(category string) []string {
+	switch category {
+	case "image":
+		return []string{"thumbnail", "metadata"}
+	case "office":
+		return []string{"office_to_pdf", "metadata"}
+	default:
+		return []string{"metadata"}
+	}
+}
+
 func (h Handler) previewTextMaxBytes(r *http.Request) int64 {
 	var raw json.RawMessage
 	err := h.DB.QueryRow(r.Context(), `SELECT value FROM system_settings WHERE key='preview.text_max_bytes'`).Scan(&raw)
@@ -910,6 +926,9 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 		}
 
 		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant == "" && category == "office" {
+			variant = "pdf"
+		}
 		if variant != "" {
 			if variant != "thumbnail" && variant != "pdf" && variant != "metadata" {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview variant"})

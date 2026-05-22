@@ -688,6 +688,9 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		}
 
 		variant := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("variant")))
+		if variant == "" && category == "office" {
+			variant = "pdf"
+		}
 		if variant != "" {
 			if variant != "thumbnail" && variant != "pdf" && variant != "metadata" {
 				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported preview variant"})

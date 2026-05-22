@@ -21,6 +21,11 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN mkdir -p public && npm run build
 
 FROM node:22-alpine AS runtime
+RUN apk add --no-cache \
+    libreoffice \
+    ffmpeg \
+    ttf-dejavu \
+    font-noto
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
 ENV NODE_ENV=production

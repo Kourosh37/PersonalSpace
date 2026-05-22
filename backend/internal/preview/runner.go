@@ -12,7 +12,11 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"io"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -110,7 +114,9 @@ func (r Runner) processOne(ctx context.Context, maxAttempts int) (bool, error) {
 			return true, r.markJobFailure(ctx, job, maxAttempts, err)
 		}
 	case "office_to_pdf":
-		return true, r.markJobFailure(ctx, job, maxAttempts, fmt.Errorf("office preview conversion is not available in this worker image"))
+		if err := r.generateOfficePDFPreview(ctx, job); err != nil {
+			return true, r.markJobFailure(ctx, job, maxAttempts, err)
+		}
 	default:
 		return true, r.markJobFailure(ctx, job, maxAttempts, fmt.Errorf("unsupported preview job type: %s", job.JobType))
 	}
@@ -247,6 +253,129 @@ func (r Runner) upsertFilePreview(ctx context.Context, fileID string, previewTyp
 			updated_at=now()
 	`, uuid.NewString(), fileID, previewType, storageKey, mimeType, sizeBytes)
 	return err
+}
+
+func (r Runner) generateOfficePDFPreview(ctx context.Context, job previewJob) error {
+	file, err := r.fetchFileForMetadata(ctx, job.FileID)
+	if err != nil {
+		return err
+	}
+
+	tmpDir, err := os.MkdirTemp("", "space-office-preview-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ext := "bin"
+	if file.Extension != nil && strings.TrimSpace(*file.Extension) != "" {
+		ext = strings.TrimPrefix(strings.TrimSpace(*file.Extension), ".")
+	}
+	sourceName := "source." + ext
+	sourcePath := filepath.Join(tmpDir, sourceName)
+	sourceFile, err := os.Create(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	stream, err := r.Storage.GetStream(ctx, file.StorageKey)
+	if err != nil {
+		sourceFile.Close()
+		return err
+	}
+	if _, err := io.Copy(sourceFile, stream); err != nil {
+		stream.Close()
+		sourceFile.Close()
+		return err
+	}
+	stream.Close()
+	if err := sourceFile.Close(); err != nil {
+		return err
+	}
+
+	timeout := r.loadOfficeTimeout(ctx)
+	convertCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(
+		convertCtx,
+		"soffice",
+		"--headless",
+		"--norestore",
+		"--nolockcheck",
+		"--nodefault",
+		"--convert-to", "pdf",
+		"--outdir", tmpDir,
+		sourcePath,
+	)
+	output, err := cmd.CombinedOutput()
+	if convertCtx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("office conversion timed out after %s", timeout.String())
+	}
+	if err != nil {
+		return fmt.Errorf("soffice conversion failed: %v (%s)", err, strings.TrimSpace(string(output)))
+	}
+
+	pdfPath := filepath.Join(tmpDir, strings.TrimSuffix(sourceName, filepath.Ext(sourceName))+".pdf")
+	if _, err := os.Stat(pdfPath); err != nil {
+		entries, scanErr := os.ReadDir(tmpDir)
+		if scanErr != nil {
+			return fmt.Errorf("converted PDF not found")
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if strings.EqualFold(filepath.Ext(entry.Name()), ".pdf") {
+				pdfPath = filepath.Join(tmpDir, entry.Name())
+				break
+			}
+		}
+		if _, err := os.Stat(pdfPath); err != nil {
+			return fmt.Errorf("converted PDF not found")
+		}
+	}
+
+	pdfBytes, err := os.ReadFile(pdfPath)
+	if err != nil {
+		return err
+	}
+	if len(pdfBytes) == 0 {
+		return fmt.Errorf("converted PDF is empty")
+	}
+
+	outputKey := fmt.Sprintf("previews/pdf/%s.pdf", file.ID)
+	if err := r.Storage.PutStream(ctx, outputKey, bytes.NewReader(pdfBytes)); err != nil {
+		return err
+	}
+	if err := r.upsertFilePreview(ctx, file.ID, "pdf", outputKey, "application/pdf", int64(len(pdfBytes))); err != nil {
+		return err
+	}
+
+	_, err = r.DB.Exec(ctx, `
+		UPDATE preview_jobs
+		SET status='completed', output_storage_key=$1, error_message=NULL, updated_at=now()
+		WHERE id=$2
+	`, outputKey, job.ID)
+	return err
+}
+
+func (r Runner) loadOfficeTimeout(ctx context.Context) time.Duration {
+	const fallback = 120 * time.Second
+
+	var raw json.RawMessage
+	err := r.DB.QueryRow(ctx, `SELECT value FROM system_settings WHERE key='preview.office_conversion_timeout_seconds'`).Scan(&raw)
+	if err != nil {
+		return fallback
+	}
+	var seconds int64
+	if err := json.Unmarshal(raw, &seconds); err != nil || seconds <= 0 {
+		return fallback
+	}
+	if seconds > 1800 {
+		seconds = 1800
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func resizeImageContain(src image.Image, maxW int, maxH int) image.Image {
