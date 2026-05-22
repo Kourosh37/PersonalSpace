@@ -138,6 +138,11 @@ func (h Handler) createShare(w http.ResponseWriter, r *http.Request) {
 		allowFolderBrowse = *req.AllowFolderBrowse
 	}
 
+	if err := h.enforceSharePolicyForCreate(r, allowPreview, allowDownload); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err = h.DB.Exec(r.Context(), `
@@ -347,6 +352,13 @@ func (h Handler) patchShare(w http.ResponseWriter, r *http.Request) {
 	isRevoked := current.IsRevoked
 	if req.IsRevoked != nil {
 		isRevoked = *req.IsRevoked
+	}
+
+	if !isRevoked {
+		if err := h.enforceSharePolicyForCreate(r, allowPreview, allowDownload); err != nil {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	var passwordHashParam any = nil
@@ -610,6 +622,20 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load sharing settings"})
+		return
+	}
+	if inline && !sharingCfg.PublicPreviewEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "public preview is disabled by admin settings"})
+		return
+	}
+	if !inline && !sharingCfg.PublicDownloadEnable {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "public download is disabled by admin settings"})
+		return
+	}
+
 	if inline && !share.AllowPreview {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview is disabled for this share"})
 		return
@@ -633,6 +659,22 @@ func (h Handler) publicShareFileStream(w http.ResponseWriter, r *http.Request, i
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file"})
 		return
+	}
+
+	if inline {
+		previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+		if cfgErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+			return
+		}
+		category, _, _ := detectPreviewMode(rec)
+		if allowed, reason := previewAllowedByConfig(previewCfg, category, true); !allowed {
+			if reason == "" {
+				reason = "public preview is disabled by admin settings"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
+			return
+		}
 	}
 
 	if share.MaxDownloads != nil && share.DownloadCount >= *share.MaxDownloads {
@@ -708,6 +750,15 @@ func (h Handler) publicShareFolderZip(w http.ResponseWriter, r *http.Request) {
 	share, err := h.resolvePublicShare(r, password, true)
 	if err != nil {
 		h.publicShareErr(w, err)
+		return
+	}
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load sharing settings"})
+		return
+	}
+	if !sharingCfg.PublicDownloadEnable {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "public download is disabled by admin settings"})
 		return
 	}
 	if share.TargetType != "folder" {
@@ -793,6 +844,14 @@ func getPublicSharePassword(r *http.Request) string {
 }
 
 func (h Handler) resolvePublicShare(r *http.Request, providedPassword string, enforcePassword bool) (shareRecord, error) {
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		return shareRecord{}, err
+	}
+	if !sharingCfg.Enabled {
+		return shareRecord{}, fmt.Errorf("sharing_disabled")
+	}
+
 	rawToken := strings.TrimSpace(chi.URLParam(r, "token"))
 	if rawToken == "" {
 		return shareRecord{}, errors.New("invalid share token")
@@ -803,7 +862,7 @@ func (h Handler) resolvePublicShare(r *http.Request, providedPassword string, en
 	var expiresAt sql.NullTime
 	var passwordHash sql.NullString
 	var maxDownloads sql.NullInt32
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
 		SELECT id, owner_id, target_type, target_id, token_hash, password_hash, expires_at, allow_preview, allow_download, allow_folder_browse, max_downloads, download_count, is_revoked, created_at
 		FROM share_links
 		WHERE token_hash=$1
@@ -891,8 +950,38 @@ func (h Handler) publicShareErr(w http.ResponseWriter, err error) {
 	case "share_password_invalid":
 		code = http.StatusUnauthorized
 		message = "invalid share password"
+	case "sharing_disabled":
+		code = http.StatusForbidden
+		message = "public sharing is disabled by admin settings"
 	}
 	writeJSON(w, code, map[string]string{"error": message})
+}
+
+func (h Handler) enforceSharePolicyForCreate(r *http.Request, allowPreview bool, allowDownload bool) error {
+	sharingCfg, err := h.getSharingRuntimeSettings(r.Context())
+	if err != nil {
+		return fmt.Errorf("could not load sharing settings")
+	}
+	if !sharingCfg.Enabled {
+		return fmt.Errorf("public sharing is disabled by admin settings")
+	}
+	if allowDownload && !sharingCfg.PublicDownloadEnable {
+		return fmt.Errorf("public download is disabled by admin settings")
+	}
+
+	previewCfg, err := h.getPreviewRuntimeSettings(r.Context())
+	if err != nil {
+		return fmt.Errorf("could not load preview settings")
+	}
+	if allowPreview {
+		if !sharingCfg.PublicPreviewEnabled {
+			return fmt.Errorf("public preview is disabled by admin settings")
+		}
+		if !previewCfg.Enabled || !previewCfg.PublicPreviewEnabled {
+			return fmt.Errorf("preview is disabled by admin settings")
+		}
+	}
+	return nil
 }
 
 func (h Handler) bumpShareDownloadCount(r *http.Request, share shareRecord) {

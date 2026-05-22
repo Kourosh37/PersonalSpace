@@ -166,6 +166,10 @@ func (h Handler) patchSettingsWithPrefix(w http.ResponseWriter, r *http.Request,
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("setting value is required for %s", key)})
 			return
 		}
+		if err := validateScopedSetting(prefix, key, item.Value); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
 		valueType := strings.TrimSpace(item.ValueType)
 		if valueType == "" {
 			valueType = "json"

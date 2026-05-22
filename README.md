@@ -25,6 +25,7 @@ This phase also includes an initial working file workflow:
 - Admin APIs/pages for settings, storage summary, expired upload cleanup, and audit logs
 - Admin user management APIs/pages (list/create/update/deactivate/change-password)
 - Auth password change endpoint (`POST /api/auth/change-password`)
+- Runtime enforcement of global sharing/preview settings on private and public routes
 - Redis-backed request rate limiting for login and public share access
 - Security headers middleware (`HSTS` behind HTTPS, `X-Frame-Options`, `nosniff`, `Permissions-Policy`)
 - CSRF protection for state-changing API requests using Origin/Referer validation

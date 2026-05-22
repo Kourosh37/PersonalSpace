@@ -30,6 +30,7 @@ Notes:
 - HTTP security headers (`HSTS`, `X-Frame-Options`, `nosniff`, `Permissions-Policy`, `COOP`).
 - CSRF protection on mutating `/api/*` requests via Origin/Referer validation.
 - Audit log entries for login and setting updates.
+- Runtime enforcement of global `sharing.*` and `preview.*` flags on private/public API routes.
 
 ## Implemented settings
 

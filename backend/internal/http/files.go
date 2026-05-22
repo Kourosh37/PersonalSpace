@@ -3,8 +3,8 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -313,6 +313,15 @@ func (h Handler) getFileMetadata(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
 		return
 	}
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	if !previewCfg.Enabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "preview generation is disabled by admin settings"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":           rec.ID,
@@ -350,6 +359,33 @@ func (h Handler) getFilePreviewInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	category, method, supported := detectPreviewMode(rec)
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	if allowed, reason := previewAllowedByConfig(previewCfg, category, false); !allowed {
+		supported = false
+		method = "disabled"
+		if reason == "" {
+			reason = "preview is disabled by admin settings"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"fileId":           rec.ID,
+			"name":             rec.Name,
+			"mimeType":         rec.MimeType,
+			"sizeBytes":        rec.SizeBytes,
+			"category":         category,
+			"method":           method,
+			"supported":        supported,
+			"textMaxBytes":     h.previewTextMaxBytes(r),
+			"streamPreviewURL": "/api/files/" + rec.ID + "/preview",
+			"textPreviewURL":   "/api/files/" + rec.ID + "/preview-content",
+			"reason":           reason,
+		})
+		return
+	}
+
 	textMaxBytes := h.previewTextMaxBytes(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"fileId":           rec.ID,
@@ -389,6 +425,18 @@ func (h Handler) getFilePreviewContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	category, method, supported := detectPreviewMode(rec)
+	previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+	if cfgErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+		return
+	}
+	if allowed, reason := previewAllowedByConfig(previewCfg, category, false); !allowed {
+		if reason == "" {
+			reason = "preview is disabled by admin settings"
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
+		return
+	}
 	if !supported || method != "text_partial" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "text preview is not available for this file type"})
 		return
@@ -528,7 +576,6 @@ func (h Handler) listFilePreviewJobs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load file metadata"})
 		return
 	}
-
 	rows, err := h.DB.Query(r.Context(), `
 		SELECT id, job_type, status, output_storage_key, error_message, attempts, created_at, updated_at
 		FROM preview_jobs
@@ -559,14 +606,14 @@ func (h Handler) listFilePreviewJobs(w http.ResponseWriter, r *http.Request) {
 		}
 
 		jobs = append(jobs, map[string]any{
-			"id":             id,
-			"jobType":        jobType,
-			"status":         status,
+			"id":               id,
+			"jobType":          jobType,
+			"status":           status,
 			"outputStorageKey": outputKey,
-			"errorMessage":   errorMessage,
-			"attempts":       attempts,
-			"createdAt":      createdAt,
-			"updatedAt":      updatedAt,
+			"errorMessage":     errorMessage,
+			"attempts":         attempts,
+			"createdAt":        createdAt,
+			"updatedAt":        updatedAt,
 		})
 	}
 	if rows.Err() != nil {
@@ -651,6 +698,19 @@ func detectPreviewMode(rec fileRecord) (category string, method string, supporte
 	}
 }
 
+func previewAllowedByConfig(cfg previewRuntimeSettings, category string, public bool) (bool, string) {
+	if !cfg.Enabled {
+		return false, "preview is disabled by admin settings"
+	}
+	if public && !cfg.PublicPreviewEnabled {
+		return false, "public preview is disabled by admin settings"
+	}
+	if (category == "video" || category == "audio") && !cfg.MediaEnabled {
+		return false, "media preview is disabled by admin settings"
+	}
+	return true, ""
+}
+
 func isTextLikeMime(mimeType string) bool {
 	if strings.HasPrefix(mimeType, "text/") {
 		return true
@@ -727,6 +787,22 @@ func (h Handler) streamOwnedFile(w http.ResponseWriter, r *http.Request, inline 
 	mimeType := "application/octet-stream"
 	if rec.MimeType != nil && *rec.MimeType != "" {
 		mimeType = *rec.MimeType
+	}
+
+	if inline {
+		category, _, _ := detectPreviewMode(rec)
+		previewCfg, cfgErr := h.getPreviewRuntimeSettings(r.Context())
+		if cfgErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not load preview settings"})
+			return
+		}
+		if allowed, reason := previewAllowedByConfig(previewCfg, category, false); !allowed {
+			if reason == "" {
+				reason = "preview is disabled by admin settings"
+			}
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": reason})
+			return
+		}
 	}
 
 	dispositionType := "attachment"
