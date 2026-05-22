@@ -4,9 +4,6 @@ This file tracks all remaining work needed to make the project fully production-
 
 ## 1) Product feature gaps
 
-- [ ] Confirm folder upload UX and behavior.
-Details: Ensure directory upload flow is stable across supported browsers and clearly documents browser limitations.
-
 - [ ] Complete dashboard file manager parity.
 Details: Ensure production-grade behavior for breadcrumb navigation, grid/list switch, details panel, and polish for large directories.
 

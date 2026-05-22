@@ -12,6 +12,12 @@ type Props = {
   onComplete?: () => void;
 };
 
+type UploaderMeta = {
+  folderid: string;
+  filename?: string;
+  name?: string;
+};
+
 type UploadStatus = "queued" | "preparing" | "uploading" | "paused" | "retrying" | "completed" | "failed" | "canceled";
 
 type UploadRow = {
@@ -61,14 +67,16 @@ function isFinalStatus(status: UploadStatus) {
 
 export function TusUploader({ folderId, onComplete }: Props) {
   const dashboardTarget = useId().replace(/:/g, "_");
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [isOnline, setIsOnline] = useState(true);
   const [lastResumeHint, setLastResumeHint] = useState<string | null>(null);
+  const [folderUploadHint, setFolderUploadHint] = useState<string | null>(null);
   const overridesRef = useRef<Record<string, RowOverride>>({});
   const preparingSetRef = useRef<Set<string>>(new Set());
 
   const uppy = useMemo(() => {
-    const instance = new Uppy({
+    const instance = new Uppy<UploaderMeta, Record<string, never>>({
       autoProceed: false,
       restrictions: {
         maxNumberOfFiles: 50,
@@ -339,8 +347,78 @@ export function TusUploader({ folderId, onComplete }: Props) {
 
   const activeCount = rows.filter((row) => !isFinalStatus(row.status)).length;
 
+  function sanitizeRelativePathForName(relativePath: string) {
+    const segments = relativePath
+      .split(/[\\/]+/)
+      .map((segment) => segment.trim())
+      .filter(Boolean)
+      .map((segment) => segment.replace(/[^a-zA-Z0-9._-]+/g, "-"));
+    if (segments.length === 0) return "upload-file";
+    return segments.join("__");
+  }
+
+  function addFolderFilesToUppy(fileList: FileList | null) {
+    if (!fileList) return;
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    let added = 0;
+    let failed = 0;
+    for (const file of files) {
+      const rawRelative = ((file as unknown as { webkitRelativePath?: string }).webkitRelativePath ?? "").trim();
+      const relativePath = rawRelative || file.name;
+      const targetName = sanitizeRelativePathForName(relativePath);
+      try {
+        uppy.addFile({
+          name: relativePath,
+          type: file.type,
+          data: file,
+          meta: {
+            filename: targetName,
+            name: targetName,
+            folderid: folderId ?? "",
+          },
+        });
+        added += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+
+    if (added > 0 && failed === 0) {
+      setFolderUploadHint(`Added ${added} files from selected folder.`);
+    } else if (added > 0 && failed > 0) {
+      setFolderUploadHint(`Added ${added} files. ${failed} files were skipped (duplicates or invalid names).`);
+    } else {
+      setFolderUploadHint("No files were added from the selected folder.");
+    }
+
+    window.setTimeout(() => setFolderUploadHint(null), 5000);
+    if (folderInputRef.current) {
+      folderInputRef.current.value = "";
+    }
+    syncRows();
+  }
+
   return (
     <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-ghost !px-2 !py-1 text-xs" onClick={() => folderInputRef.current?.click()} type="button">
+          Add Folder
+        </button>
+        <input
+          className="hidden"
+          multiple
+          onChange={(event) => addFolderFilesToUppy(event.target.files)}
+          ref={folderInputRef}
+          type="file"
+          {...({ webkitdirectory: "" } as Record<string, string>)}
+        />
+        <p className="text-xs text-slate-600">
+          Folder upload uses browser directory APIs. Files are queued recursively and stored in the current folder.
+        </p>
+      </div>
+
       <div id={dashboardTarget} />
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -369,6 +447,10 @@ export function TusUploader({ folderId, onComplete }: Props) {
           <span className="text-slate-600">Active uploads: {activeCount}</span>
         </div>
         {lastResumeHint ? <p className="mb-2 text-xs text-emerald-700">{lastResumeHint}</p> : null}
+        {folderUploadHint ? <p className="mb-2 text-xs text-slate-700">{folderUploadHint}</p> : null}
+        <p className="mb-2 text-[11px] text-slate-500">
+          Browser limitation: background uploads may pause if the tab is suspended/closed. Uploads can resume later when you return.
+        </p>
 
         {rows.length === 0 ? (
           <p className="text-xs text-slate-600">No upload activity yet.</p>

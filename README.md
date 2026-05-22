@@ -110,6 +110,12 @@ See:
 
 - This phase initializes production-minded structure and core modules.
 - Dashboard includes Uppy Tus-based resumable upload panel.
+- Folder upload is supported on browsers that expose directory selection APIs (for example Chromium-based browsers).
+  On unsupported browsers, users can still upload files normally.
+- When selecting a folder, files are queued recursively and uploaded into the current destination folder.
+  Nested path information is encoded into file names for collision reduction in the current phase.
+- If a browser tab is suspended or fully closed, in-progress uploads may pause.
+  Users can continue by returning to the app and re-queuing/resuming where supported by Tus fingerprint persistence.
 - `space-app` image now bundles `LibreOffice` and `ffmpeg` so host installation is not required for preview tooling.
 - `backup.sh` now creates a full backup directory containing PostgreSQL dump plus storage volume archive.
 - `restore.sh <backup_dir> --force` restores both DB and storage data.
