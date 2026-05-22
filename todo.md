@@ -31,7 +31,7 @@ Details: Verify download-limit, expiration, revoke behavior, and optional passwo
 Details: Run `go test`, frontend build/type checks, migration checks, and Docker build smoke validation on each change.
 
 - [ ] Validate backup/restore with disaster-recovery drills.
-Details: Execute full restore in a clean environment and verify DB + storage integrity.
+Details: `scripts/drill-backup-restore.sh` now creates an isolated Compose project, backs up marker DB/storage data, mutates it, restores, and verifies both markers. Local execution on this workstation was blocked by Docker image build/network proxy failure during `apk add`; run the drill on the production-like server or after prebuilding `space-app:latest`, then remove this item after it passes and `drill-report.txt` is produced.
 
 ## 3) Operations and observability
 
