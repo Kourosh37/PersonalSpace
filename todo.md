@@ -30,9 +30,6 @@ Details: Verify download-limit, expiration, revoke behavior, and optional passwo
 - [ ] Add backend automated tests.
 Details: Current baseline tests were added for `settings_validation` and HTTP range parsing. Remaining: auth/session, uploads, share permissions, preview pipeline, and DB-backed integration coverage.
 
-- [ ] Add frontend automated tests.
-Details: E2E/smoke coverage for login, uploads, preview flows, share links, and admin settings flows.
-
 - [x] Add CI pipeline.
 Details: Run `go test`, frontend build/type checks, migration checks, and Docker build smoke validation on each change.
 

@@ -12,6 +12,11 @@ Thumbs.db
 frontend/node_modules
 frontend/.next
 frontend/.turbo
+frontend/test-results
+frontend/playwright-report
+frontend/blob-report
+frontend/tsconfig.tsbuildinfo
+frontend/*.log
 
 # Go
 backend/bin

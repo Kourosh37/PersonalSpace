@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Uppy from "@uppy/core";
 import Tus from "@uppy/tus";
 import Dashboard from "@uppy/dashboard";
@@ -66,7 +66,7 @@ function isFinalStatus(status: UploadStatus) {
 }
 
 export function TusUploader({ folderId, onComplete }: Props) {
-  const dashboardTarget = useId().replace(/:/g, "_");
+  const dashboardRef = useRef<HTMLDivElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [rows, setRows] = useState<UploadRow[]>([]);
   const [isOnline, setIsOnline] = useState(true);
@@ -99,17 +99,8 @@ export function TusUploader({ folderId, onComplete }: Props) {
       },
     });
 
-    instance.use(Dashboard, {
-      inline: true,
-      target: `#${dashboardTarget}`,
-      height: 330,
-      proudlyDisplayPoweredByUppy: false,
-      showLinkToFileUploadResult: false,
-      note: "Resumable uploads via Tus protocol",
-    });
-
     return instance;
-  }, [dashboardTarget, folderId]);
+  }, [folderId]);
 
   const syncRows = useCallback(() => {
     const now = Date.now();
@@ -221,6 +212,26 @@ export function TusUploader({ folderId, onComplete }: Props) {
   useEffect(() => {
     uppy.setMeta({ folderid: folderId ?? "" });
   }, [uppy, folderId]);
+
+  useEffect(() => {
+    if (!dashboardRef.current) return;
+
+    uppy.use(Dashboard, {
+      inline: true,
+      target: dashboardRef.current,
+      height: 330,
+      proudlyDisplayPoweredByUppy: false,
+      showLinkToFileUploadResult: false,
+      note: "Resumable uploads via Tus protocol",
+    });
+
+    return () => {
+      const plugin = uppy.getPlugin("Dashboard");
+      if (plugin) {
+        uppy.removePlugin(plugin);
+      }
+    };
+  }, [uppy]);
 
   useEffect(() => {
     const updateNetwork = () => {
@@ -419,7 +430,7 @@ export function TusUploader({ folderId, onComplete }: Props) {
         </p>
       </div>
 
-      <div id={dashboardTarget} />
+      <div ref={dashboardRef} />
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
