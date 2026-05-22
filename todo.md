@@ -4,9 +4,6 @@ This file tracks all remaining work needed to make the project fully production-
 
 ## 1) Product feature gaps
 
-- [ ] Finalize upload UX parity with the original spec.
-Details: Confirm/support queue states (`queued`, `preparing`, `uploading`, `paused`, `retrying`, `completed`, `failed`, `canceled`), resume-after-refresh behavior, network recovery behavior, and bulk controls (`pause all`, `resume all`, `cancel all`) where technically possible.
-
 - [ ] Confirm folder upload UX and behavior.
 Details: Ensure directory upload flow is stable across supported browsers and clearly documents browser limitations.
 
