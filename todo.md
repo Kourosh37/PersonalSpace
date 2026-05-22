@@ -38,8 +38,10 @@ Details: Execute full restore in a clean environment and verify DB + storage int
 
 ## 3) Operations and observability
 
-- [ ] Define minimum alerting policy.
-Details: Alerts for repeated auth failures, DB/Redis connectivity issues, elevated 5xx rates, and preview worker failures.
+Completed and removed from active TODO:
+- structured logging
+- metrics and health observability
+- minimum alerting policy
 
 ## 4) Production documentation
 
